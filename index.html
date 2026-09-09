@@ -375,6 +375,8 @@ let state = {
   editingEventId: null,
   reportData: {},
   reportError: null,
+  relatorioState: 'idle',
+  relatorioErro: null,
   expandedReportEventId: null,
   copiedEventId: null,
   newMemberGrau: null,
@@ -413,70 +415,48 @@ function jsonp(url, timeoutMs) {
   });
 }
 
-// Lanca em caso de falha, em vez de devolver null. Devolver null fazia o app
-// confundir "nao consegui ler" com "nao tem nada salvo" e mostrar a lista
-// inteira como Aguardando.
-async function storageGet(key) {
-  let lastError;
+// Leitura e gravacao passam pelo mesmo caminho: o backend responde confirmando
+// a operacao, entao nao e mais preciso gravar as cegas e reler para conferir.
+// Lanca em caso de falha, em vez de devolver vazio - devolver vazio fazia o app
+// confundir "nao consegui ler" com "nao tem nada salvo".
+async function api(action, params) {
+  const query = Object.keys(params || {})
+    .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(params[k]))
+    .join('&');
+  const url = API_URL + '?action=' + encodeURIComponent(action) + (query ? '&' + query : '');
+
+  let ultimoErro;
   for (let tentativa = 0; tentativa <= READ_RETRIES; tentativa++) {
     try {
-      const data = await jsonp(API_URL + '?key=' + encodeURIComponent(key), READ_TIMEOUT);
-      return data.value ? JSON.parse(data.value) : null;
+      const r = await jsonp(url, READ_TIMEOUT);
+      if (!r || !r.ok) throw new Error((r && r.erro) || 'A planilha recusou a operação');
+      return r;
     } catch (e) {
-      lastError = e;
-      console.error('Erro ao carregar', key, 'tentativa', tentativa + 1, e);
+      ultimoErro = e;
+      console.error('Falha em', action, 'tentativa', tentativa + 1, e);
     }
   }
-  throw lastError;
-}
-
-// O 'no-cors' impede ler a resposta, entao a gravacao e cega. Por isso
-// confirmamos relendo a chave depois e comparando com o que foi enviado.
-// O keepalive faz o navegador terminar de enviar mesmo se a pagina for
-// fechada no meio - sem ele, fechar o app logo apos marcar perdia a marcacao.
-async function storageSet(key, value) {
-  const enviado = JSON.stringify(value);
-  await fetch(API_URL, {
-    method: 'POST',
-    mode: 'no-cors',
-    keepalive: true,
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ key: key, value: enviado })
-  });
-  return enviado;
+  throw ultimoErro;
 }
 
 // Rede de seguranca para quando a pagina esta sendo fechada: o sendBeacon e
 // entregue pelo navegador mesmo depois da aba morrer. Nao da para conferir o
 // resultado, mas e melhor que perder a marcacao.
-function storageSetBeacon(key, value) {
+function apiBeacon(action, params) {
   if (!navigator.sendBeacon) return false;
-  const corpo = JSON.stringify({ key: key, value: JSON.stringify(value) });
+  const corpo = JSON.stringify(Object.assign({ action: action }, params));
   return navigator.sendBeacon(API_URL, new Blob([corpo], { type: 'text/plain;charset=utf-8' }));
-}
-
-async function storageSetVerificado(key, value) {
-  const enviado = await storageSet(key, value);
-  // Duas chances: a planilha as vezes leva um instante para refletir a
-  // gravacao, e acusar erro nesse intervalo seria alarme falso.
-  for (let tentativa = 0; tentativa < 2; tentativa++) {
-    if (tentativa) await new Promise(r => setTimeout(r, 1500));
-    const gravado = await storageGet(key);
-    if (JSON.stringify(gravado) === enviado) return true;
-  }
-  throw new Error('O que foi salvo não confere com o que está na planilha');
 }
 
 // Usado nas telas do organizador, onde quem grava e uma pessoa so e um aviso
 // direto resolve.
-async function salvarOuAvisar(key, value) {
+async function salvarOuAvisar(action, params) {
   try {
-    await storageSetVerificado(key, value);
-    return true;
+    return await api(action, params);
   } catch (e) {
     alert('Não consegui salvar na planilha.\n\n' + e.message + '.\n\nVerifique sua conexão e tente de novo.');
     await loadInitial();
-    return false;
+    return null;
   }
 }
 
@@ -485,12 +465,9 @@ async function loadInitial() {
   state.loadError = null;
   render();
   try {
-    const [roster, events] = await Promise.all([
-      storageGet('mc-roster'),
-      storageGet('mc-events'),
-    ]);
-    state.roster = roster || [];
-    state.events = events || [];
+    const r = await api('dados');
+    state.roster = r.membros || [];
+    state.events = r.eventos || [];
   } catch (e) {
     state.loadError = e.message;
   }
@@ -503,9 +480,9 @@ async function loadEventStatus(eventId) {
   state.statusError = null;
   render();
   try {
-    const s = await storageGet('mc-status-' + eventId);
+    const r = await api('presencas', { eventoId: eventId });
     if (state.currentEventId !== eventId) return;
-    state.currentStatus = s || {};
+    state.currentStatus = r.presencas || {};
     state.statusLoaded = true;
   } catch (e) {
     if (state.currentEventId !== eventId) return;
@@ -523,72 +500,133 @@ function getMemberStatus(memberId) {
 const ESPERA_AGRUPAR = 600;
 let timerGravacao = null;
 let gravacaoEmCurso = false;
-// A pendencia carrega o proprio eventId: sem isso, marcar e trocar de evento
-// antes do prazo gravaria os dados de um evento na chave do outro.
-let pendente = null;
+// Cada pendencia guarda um membro so, com o proprio eventId. Antes o app
+// mandava a lista inteira de volta, e quem gravasse por ultimo apagava a
+// confirmacao de quem tinha gravado antes.
+let pendentes = {};
+
+function chavePendencia(eventId, memberId) { return eventId + '|' + memberId; }
 
 function setMemberStatus(memberId, patch) {
   // Sem a leitura confirmada, state.currentStatus pode estar vazio por falha de
-  // rede. Gravar nesse estado apagaria a confirmacao de todo mundo.
+  // rede, e a tela mostraria um estado que nao e o real.
   if (!state.statusLoaded) return;
 
-  const current = getMemberStatus(memberId);
-  state.currentStatus = { ...state.currentStatus, [memberId]: { ...current, ...patch } };
+  const atualizado = { ...getMemberStatus(memberId), ...patch };
+  state.currentStatus = { ...state.currentStatus, [memberId]: atualizado };
   state.saveSeq++;
   state.saveState = 'saving';
-  pendente = { eventId: state.currentEventId, valor: state.currentStatus, seq: state.saveSeq };
+  pendentes[chavePendencia(state.currentEventId, memberId)] = {
+    eventoId: state.currentEventId,
+    membroId: memberId,
+    dados: atualizado
+  };
   render();
 
   clearTimeout(timerGravacao);
-  timerGravacao = setTimeout(gravarPendente, ESPERA_AGRUPAR);
+  timerGravacao = setTimeout(gravarPendentes, ESPERA_AGRUPAR);
 }
 
-async function gravarPendente() {
-  if (!pendente) return;
+// Os parametros trafegam pela URL, entao a lista de participantes vai como
+// texto separado por virgula e so os campos que o backend usa sao enviados.
+function paramsDeEvento(ev) {
+  return {
+    id: ev.id,
+    nome: ev.nome,
+    data: ev.data || '',
+    horario: ev.horario || '',
+    endereco: ev.endereco || '',
+    outros: ev.outros || '',
+    status: ev.status || 'ativo',
+    membroIds: (ev.memberIds || []).join(',')
+  };
+}
+
+function paramsDePresenca(p) {
+  return {
+    eventoId: p.eventoId,
+    membroId: p.membroId,
+    status: p.dados.status || 'aguardando',
+    direto: !!p.dados.direto,
+    destacado: !!p.dados.destacado,
+    acompanhado: !!p.dados.acompanhado
+  };
+}
+
+async function gravarPendentes() {
   if (gravacaoEmCurso) {
-    // Deixa a gravacao atual terminar e tenta de novo logo depois.
     clearTimeout(timerGravacao);
-    timerGravacao = setTimeout(gravarPendente, ESPERA_AGRUPAR);
+    timerGravacao = setTimeout(gravarPendentes, ESPERA_AGRUPAR);
     return;
   }
-  const alvo = pendente;
+  const chaves = Object.keys(pendentes);
+  if (!chaves.length) return;
+
   gravacaoEmCurso = true;
+  const falhou = [];
   try {
-    await storageSetVerificado('mc-status-' + alvo.eventId, alvo.valor);
-    // Se o membro mexeu de novo enquanto gravava, quem manda e a proxima rodada.
-    if (alvo.seq !== state.saveSeq) return;
-    pendente = null;
-    if (alvo.eventId !== state.currentEventId) return;
-    state.saveState = 'saved';
-    render();
+    for (const chave of chaves) {
+      const p = pendentes[chave];
+      try {
+        await api('presenca', paramsDePresenca(p));
+        // So sai da fila se a mesma marcacao ainda estiver pendente: se o
+        // membro mexeu de novo enquanto gravava, a nova versao fica.
+        if (pendentes[chave] === p) delete pendentes[chave];
+      } catch (e) {
+        falhou.push(chave);
+      }
+    }
+  } finally {
+    gravacaoEmCurso = false;
+  }
+
+  state.saveState = falhou.length ? 'error' : 'saved';
+  render();
+  if (!falhou.length) {
+    const seq = state.saveSeq;
     setTimeout(() => {
-      if (alvo.seq === state.saveSeq && state.saveState === 'saved') {
+      if (seq === state.saveSeq && state.saveState === 'saved') {
         state.saveState = 'idle';
         render();
       }
     }, 2000);
+  }
+}
+
+// Regera a aba Relatorio da planilha. Fica fora do caminho da confirmacao de
+// propósito: gerar junto com cada marcacao dobrava o tempo que o membro espera.
+async function gerarRelatorio() {
+  state.relatorioState = 'gerando';
+  state.relatorioErro = null;
+  render();
+  try {
+    await api('relatorio');
+    state.relatorioState = 'ok';
   } catch (e) {
-    if (alvo.seq !== state.saveSeq || alvo.eventId !== state.currentEventId) return;
-    // A marcacao continua na tela de proposito: desfazer sem avisar confunde.
-    // O aviso deixa claro que ainda nao esta salvo e da o botao de tentar.
-    state.saveState = 'error';
-    render();
-  } finally {
-    gravacaoEmCurso = false;
+    state.relatorioState = 'erro';
+    state.relatorioErro = e.message;
+  }
+  render();
+  if (state.relatorioState === 'ok') {
+    setTimeout(() => {
+      if (state.relatorioState === 'ok') { state.relatorioState = 'idle'; render(); }
+    }, 4000);
   }
 }
 
 function gravarAgora() {
-  if (!pendente) return;
+  if (!Object.keys(pendentes).length) return;
   clearTimeout(timerGravacao);
   state.saveState = 'saving';
   render();
-  gravarPendente();
+  gravarPendentes();
 }
 
 // Se a pagina for fechada com gravacao pendente, entrega pelo beacon.
 window.addEventListener('pagehide', () => {
-  if (pendente) storageSetBeacon('mc-status-' + pendente.eventId, pendente.valor);
+  Object.keys(pendentes).forEach(chave => {
+    apiBeacon('presenca', paramsDePresenca(pendentes[chave]));
+  });
 });
 
 function escapeHtml(str) {
@@ -659,9 +697,9 @@ function renderHome(app) {
 
 async function openEvent(id) {
   // Descarrega o que ficou pendente do evento anterior antes de trocar.
-  if (pendente && pendente.eventId !== id) {
+  if (Object.keys(pendentes).length) {
     clearTimeout(timerGravacao);
-    gravarPendente();
+    gravarPendentes();
   }
   state.currentEventId = id;
   state.view = 'event';
@@ -821,11 +859,11 @@ async function loadReportData() {
   const missing = encerrados.filter(e => !(e.id in state.reportData));
   state.reportError = null;
   if (missing.length) {
-    const results = await Promise.allSettled(missing.map(e => storageGet('mc-status-' + e.id)));
+    const results = await Promise.allSettled(missing.map(e => api('presencas', { eventoId: e.id })));
     missing.forEach((e, i) => {
       // Um evento sem dado fica de fora de propósito: melhor mostrar traço do
       // que um relatorio dizendo que ninguem confirmou.
-      if (results[i].status === 'fulfilled') state.reportData[e.id] = results[i].value || {};
+      if (results[i].status === 'fulfilled') state.reportData[e.id] = results[i].value.presencas || {};
       else state.reportError = results[i].reason.message;
     });
   }
@@ -988,8 +1026,15 @@ function renderAdminEventos() {
   if (state.newEventSelected !== null) {
     return renderEventForm();
   }
+  const rel = state.relatorioState;
   return `
-    <button class="btn block" data-action="start-new-event" style="margin-bottom: 16px;">+ Criar evento</button>
+    <button class="btn block" data-action="start-new-event" style="margin-bottom: 10px;">+ Criar evento</button>
+    <button class="btn secondary block" data-action="gerar-relatorio" style="margin-bottom: 6px;" ${rel === 'gerando' ? 'disabled' : ''}>
+      ${rel === 'gerando' ? 'Gerando na planilha…' : '📊 Gerar relatório na planilha'}
+    </button>
+    ${rel === 'ok' ? '<div class="alert ok" style="margin-bottom:16px;"><div class="alert-msg">✅ Relatório atualizado na aba <b>Relatorio</b> da planilha.</div></div>' : ''}
+    ${rel === 'erro' ? `<div class="alert" style="margin-bottom:16px;"><div class="alert-title">Não consegui gerar</div><div class="alert-msg">${escapeHtml(state.relatorioErro || '')}.</div></div>` : ''}
+    ${rel !== 'ok' && rel !== 'erro' ? '<div style="margin-bottom:16px;"></div>' : ''}
     ${state.events.length === 0 ? '<div class="empty">Nenhum evento criado ainda.</div>' : state.events.map(ev => {
       const memberCount = ev.memberIds.length;
       return `
@@ -1102,6 +1147,7 @@ document.getElementById('app').addEventListener('click', async (e) => {
   if (action === 'retry-load') return loadInitial();
   if (action === 'retry-report') return loadReportData();
   if (action === 'retry-save') return gravarAgora();
+  if (action === 'gerar-relatorio') return gerarRelatorio();
   if (action === 'retry-status') return loadEventStatus(state.currentEventId);
   if (action === 'open-event') return openEvent(id);
   if (action === 'go-home') { state.view = 'home'; state.isAdmin = false; return render(); }
@@ -1160,12 +1206,12 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.newMemberDivisao = null;
     state.newMemberNome = '';
     render();
-    await salvarOuAvisar('mc-roster', state.roster);
+    await salvarOuAvisar('membroSalvar', member);
   }
   if (action === 'remove-member') {
     state.roster = state.roster.filter(m => m.id !== id);
     render();
-    await salvarOuAvisar('mc-roster', state.roster);
+    await salvarOuAvisar('membroRemover', { id });
   }
 
   if (action === 'start-new-event') {
@@ -1193,26 +1239,33 @@ document.getElementById('app').addEventListener('click', async (e) => {
     const outros = document.getElementById('new-event-outros').value.trim();
     const checked = Array.from(document.querySelectorAll('.new-event-checkbox:checked')).map(c => c.dataset.id);
     if (!nome || checked.length === 0) return;
-    if (state.editingEventId) {
-      state.events = state.events.map(ev => ev.id === state.editingEventId ? { ...ev, nome, memberIds: checked, data, horario, endereco, outros } : ev);
-    } else {
-      const newEvent = { id: genId(), nome, memberIds: checked, status: 'ativo', createdAt: Date.now(), data, horario, endereco, outros };
-      state.events = [...state.events, newEvent];
-    }
+    const evento = {
+      id: state.editingEventId || genId(),
+      nome, memberIds: checked, data, horario, endereco, outros,
+      status: state.editingEventId
+        ? (state.events.find(e => e.id === state.editingEventId) || {}).status || 'ativo'
+        : 'ativo'
+    };
+    state.events = state.editingEventId
+      ? state.events.map(ev => ev.id === evento.id ? { ...ev, ...evento } : ev)
+      : [...state.events, evento];
     state.newEventSelected = null;
     state.editingEventId = null;
     render();
-    await salvarOuAvisar('mc-events', state.events);
+    await salvarOuAvisar('eventoSalvar', paramsDeEvento(evento));
   }
   if (action === 'toggle-event-status') {
-    state.events = state.events.map(ev => ev.id === id ? { ...ev, status: ev.status === 'encerrado' ? 'ativo' : 'encerrado' } : ev);
+    const ev = state.events.find(e => e.id === id);
+    if (!ev) return;
+    const novoStatus = ev.status === 'encerrado' ? 'ativo' : 'encerrado';
+    state.events = state.events.map(e => e.id === id ? { ...e, status: novoStatus } : e);
     render();
-    await salvarOuAvisar('mc-events', state.events);
+    await salvarOuAvisar('eventoSalvar', paramsDeEvento({ ...ev, status: novoStatus }));
   }
   if (action === 'delete-event') {
     state.events = state.events.filter(ev => ev.id !== id);
     render();
-    await salvarOuAvisar('mc-events', state.events);
+    await salvarOuAvisar('eventoRemover', { id });
   }
 });
 
