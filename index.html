@@ -319,6 +319,24 @@
   .footer-admin { text-align: center; margin-top: 34px; }
   .footer-admin .brand-tag { font-size: 10.5px; color: var(--line-strong); letter-spacing: 0.08em; margin-top: 14px; font-family: 'IBM Plex Sans', sans-serif; }
   .loading { text-align: center; padding: 60px 0; color: var(--text-muted); font-size: 14px; }
+  .alert {
+    border: 1px solid var(--danger-line);
+    border-left-width: 3px;
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+  .alert.info { border-color: var(--line-strong); }
+  .alert.ok { border-color: var(--white-strong); }
+  .alert-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--white-strong);
+    margin-bottom: 4px;
+  }
+  .alert-msg { font-size: 12.5px; color: var(--text-muted); line-height: 1.6; }
+  .member-row.travado { opacity: 0.4; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -346,11 +364,17 @@ let state = {
   adminTab: 'eventos',
   expandedMemberId: null,
   loading: true,
+  loadError: null,
+  statusLoaded: false,
+  statusError: null,
+  saveState: 'idle',
+  saveSeq: 0,
   saving: false,
   pinError: false,
   newEventSelected: null,
   editingEventId: null,
   reportData: {},
+  reportError: null,
   expandedReportEventId: null,
   copiedEventId: null,
   newMemberGrau: null,
@@ -364,84 +388,208 @@ function genId() {
 
 const API_URL = 'https://script.google.com/macros/s/AKfycbyotQH6FypFdkC6D42WQHszNiuG29wqIBal2jBcwXdoCsT-Om_0gyDxFE02hxfwrZegxw/exec';
 
-function jsonp(url) {
+// A API do Apps Script leva de 2 a 4s numa conexao boa. No 4G do celular
+// passa disso com folga, entao o limite precisa ser generoso.
+const READ_TIMEOUT = 20000;
+const READ_RETRIES = 2;
+
+function jsonp(url, timeoutMs) {
   return new Promise((resolve, reject) => {
     const cbName = 'cb_' + Math.random().toString(36).slice(2);
     const script = document.createElement('script');
-    window[cbName] = (data) => {
-      resolve(data);
+    let timer = null;
+    const cleanup = () => {
+      clearTimeout(timer);
       delete window[cbName];
       script.remove();
     };
-    script.onerror = () => {
-      reject(new Error('JSONP falhou'));
-      delete window[cbName];
-      script.remove();
-    };
+    window[cbName] = (data) => { cleanup(); resolve(data); };
+    script.onerror = () => { cleanup(); reject(new Error('Falha de conexao')); };
     script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cbName;
     document.body.appendChild(script);
-    setTimeout(() => {
-      if (window[cbName]) {
-        reject(new Error('JSONP timeout'));
-        delete window[cbName];
-        script.remove();
-      }
-    }, 8000);
+    timer = setTimeout(() => {
+      if (window[cbName]) { cleanup(); reject(new Error('A conexao demorou demais')); }
+    }, timeoutMs);
   });
 }
 
+// Lanca em caso de falha, em vez de devolver null. Devolver null fazia o app
+// confundir "nao consegui ler" com "nao tem nada salvo" e mostrar a lista
+// inteira como Aguardando.
 async function storageGet(key) {
-  try {
-    const data = await jsonp(API_URL + '?key=' + encodeURIComponent(key));
-    return data.value ? JSON.parse(data.value) : null;
-  } catch (e) {
-    console.error('Erro ao carregar', key, e);
-    return null;
+  let lastError;
+  for (let tentativa = 0; tentativa <= READ_RETRIES; tentativa++) {
+    try {
+      const data = await jsonp(API_URL + '?key=' + encodeURIComponent(key), READ_TIMEOUT);
+      return data.value ? JSON.parse(data.value) : null;
+    } catch (e) {
+      lastError = e;
+      console.error('Erro ao carregar', key, 'tentativa', tentativa + 1, e);
+    }
   }
+  throw lastError;
 }
+
+// O 'no-cors' impede ler a resposta, entao a gravacao e cega. Por isso
+// confirmamos relendo a chave depois e comparando com o que foi enviado.
+// O keepalive faz o navegador terminar de enviar mesmo se a pagina for
+// fechada no meio - sem ele, fechar o app logo apos marcar perdia a marcacao.
 async function storageSet(key, value) {
+  const enviado = JSON.stringify(value);
+  await fetch(API_URL, {
+    method: 'POST',
+    mode: 'no-cors',
+    keepalive: true,
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ key: key, value: enviado })
+  });
+  return enviado;
+}
+
+// Rede de seguranca para quando a pagina esta sendo fechada: o sendBeacon e
+// entregue pelo navegador mesmo depois da aba morrer. Nao da para conferir o
+// resultado, mas e melhor que perder a marcacao.
+function storageSetBeacon(key, value) {
+  if (!navigator.sendBeacon) return false;
+  const corpo = JSON.stringify({ key: key, value: JSON.stringify(value) });
+  return navigator.sendBeacon(API_URL, new Blob([corpo], { type: 'text/plain;charset=utf-8' }));
+}
+
+async function storageSetVerificado(key, value) {
+  const enviado = await storageSet(key, value);
+  // Duas chances: a planilha as vezes leva um instante para refletir a
+  // gravacao, e acusar erro nesse intervalo seria alarme falso.
+  for (let tentativa = 0; tentativa < 2; tentativa++) {
+    if (tentativa) await new Promise(r => setTimeout(r, 1500));
+    const gravado = await storageGet(key);
+    if (JSON.stringify(gravado) === enviado) return true;
+  }
+  throw new Error('O que foi salvo não confere com o que está na planilha');
+}
+
+// Usado nas telas do organizador, onde quem grava e uma pessoa so e um aviso
+// direto resolve.
+async function salvarOuAvisar(key, value) {
   try {
-    await fetch(API_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ key: key, value: JSON.stringify(value) })
-    });
+    await storageSetVerificado(key, value);
     return true;
   } catch (e) {
-    console.error('Erro ao salvar', key, e);
+    alert('Não consegui salvar na planilha.\n\n' + e.message + '.\n\nVerifique sua conexão e tente de novo.');
+    await loadInitial();
     return false;
   }
 }
 
 async function loadInitial() {
-  const [roster, events] = await Promise.all([
-    storageGet('mc-roster'),
-    storageGet('mc-events'),
-  ]);
-  state.roster = roster || [];
-  state.events = events || [];
+  state.loading = true;
+  state.loadError = null;
+  render();
+  try {
+    const [roster, events] = await Promise.all([
+      storageGet('mc-roster'),
+      storageGet('mc-events'),
+    ]);
+    state.roster = roster || [];
+    state.events = events || [];
+  } catch (e) {
+    state.loadError = e.message;
+  }
   state.loading = false;
   render();
 }
 
 async function loadEventStatus(eventId) {
-  const s = await storageGet('mc-status-' + eventId);
-  state.currentStatus = s || {};
+  state.statusLoaded = false;
+  state.statusError = null;
+  render();
+  try {
+    const s = await storageGet('mc-status-' + eventId);
+    if (state.currentEventId !== eventId) return;
+    state.currentStatus = s || {};
+    state.statusLoaded = true;
+  } catch (e) {
+    if (state.currentEventId !== eventId) return;
+    state.statusError = e.message;
+  }
   render();
 }
 
 function getMemberStatus(memberId) {
-  return state.currentStatus[memberId] || { status: 'aguardando', direto: false, destacado: false };
+  return state.currentStatus[memberId] || { status: 'aguardando', direto: false, destacado: false, acompanhado: false };
 }
 
-async function setMemberStatus(memberId, patch) {
+// A tela responde na hora e a gravacao corre por fora. Toques seguidos
+// (status, depois Direto, depois Destacado) sao agrupados numa gravacao so.
+const ESPERA_AGRUPAR = 600;
+let timerGravacao = null;
+let gravacaoEmCurso = false;
+// A pendencia carrega o proprio eventId: sem isso, marcar e trocar de evento
+// antes do prazo gravaria os dados de um evento na chave do outro.
+let pendente = null;
+
+function setMemberStatus(memberId, patch) {
+  // Sem a leitura confirmada, state.currentStatus pode estar vazio por falha de
+  // rede. Gravar nesse estado apagaria a confirmacao de todo mundo.
+  if (!state.statusLoaded) return;
+
   const current = getMemberStatus(memberId);
-  const updated = { ...current, ...patch };
-  state.currentStatus = { ...state.currentStatus, [memberId]: updated };
+  state.currentStatus = { ...state.currentStatus, [memberId]: { ...current, ...patch } };
+  state.saveSeq++;
+  state.saveState = 'saving';
+  pendente = { eventId: state.currentEventId, valor: state.currentStatus, seq: state.saveSeq };
   render();
-  await storageSet('mc-status-' + state.currentEventId, state.currentStatus);
+
+  clearTimeout(timerGravacao);
+  timerGravacao = setTimeout(gravarPendente, ESPERA_AGRUPAR);
 }
+
+async function gravarPendente() {
+  if (!pendente) return;
+  if (gravacaoEmCurso) {
+    // Deixa a gravacao atual terminar e tenta de novo logo depois.
+    clearTimeout(timerGravacao);
+    timerGravacao = setTimeout(gravarPendente, ESPERA_AGRUPAR);
+    return;
+  }
+  const alvo = pendente;
+  gravacaoEmCurso = true;
+  try {
+    await storageSetVerificado('mc-status-' + alvo.eventId, alvo.valor);
+    // Se o membro mexeu de novo enquanto gravava, quem manda e a proxima rodada.
+    if (alvo.seq !== state.saveSeq) return;
+    pendente = null;
+    if (alvo.eventId !== state.currentEventId) return;
+    state.saveState = 'saved';
+    render();
+    setTimeout(() => {
+      if (alvo.seq === state.saveSeq && state.saveState === 'saved') {
+        state.saveState = 'idle';
+        render();
+      }
+    }, 2000);
+  } catch (e) {
+    if (alvo.seq !== state.saveSeq || alvo.eventId !== state.currentEventId) return;
+    // A marcacao continua na tela de proposito: desfazer sem avisar confunde.
+    // O aviso deixa claro que ainda nao esta salvo e da o botao de tentar.
+    state.saveState = 'error';
+    render();
+  } finally {
+    gravacaoEmCurso = false;
+  }
+}
+
+function gravarAgora() {
+  if (!pendente) return;
+  clearTimeout(timerGravacao);
+  state.saveState = 'saving';
+  render();
+  gravarPendente();
+}
+
+// Se a pagina for fechada com gravacao pendente, entrega pelo beacon.
+window.addEventListener('pagehide', () => {
+  if (pendente) storageSetBeacon('mc-status-' + pendente.eventId, pendente.valor);
+});
 
 function escapeHtml(str) {
   const d = document.createElement('div');
@@ -455,6 +603,19 @@ function render() {
   const app = document.getElementById('app');
   if (state.loading) {
     app.innerHTML = '<div class="loading">Carregando…</div>';
+    return;
+  }
+  if (state.loadError) {
+    app.innerHTML = `
+      <div class="crest-wrap">
+        <img src="data:image/png;base64,${LOGO_B64}" alt="Insanos MC Brasil">
+      </div>
+      <div class="alert">
+        <div class="alert-title">Não consegui carregar os dados</div>
+        <div class="alert-msg">${escapeHtml(state.loadError)}.<br>Verifique sua conexão e tente de novo.</div>
+      </div>
+      <button class="btn block" data-action="retry-load">Tentar de novo</button>
+    `;
     return;
   }
   if (state.view === 'home') return renderHome(app);
@@ -497,10 +658,16 @@ function renderHome(app) {
 }
 
 async function openEvent(id) {
+  // Descarrega o que ficou pendente do evento anterior antes de trocar.
+  if (pendente && pendente.eventId !== id) {
+    clearTimeout(timerGravacao);
+    gravarPendente();
+  }
   state.currentEventId = id;
   state.view = 'event';
   state.expandedMemberId = null;
   state.currentStatus = {};
+  state.saveState = 'idle';
   render();
   await loadEventStatus(id);
 }
@@ -534,6 +701,7 @@ function renderEvent(app) {
         ${ev.outros ? `<div class="info-line" style="white-space: pre-wrap;">ℹ️ ${escapeHtml(ev.outros)}</div>` : ''}
       </div>
     ` : ''}
+    ${renderStatusBanner()}
     <div class="card" style="padding: 4px 16px;">
       ${members.length === 0 ? '<div class="empty">Nenhum membro nesse evento.</div>' : members.map((m, i) => renderMemberRow(m, i)).join('')}
     </div>
@@ -546,13 +714,47 @@ function renderEvent(app) {
   `;
 }
 
+// Enquanto a leitura nao confirma, a lista aparece esmaecida e nao aceita
+// toque: o que esta na tela ainda nao e o dado real da planilha.
+function renderStatusBanner() {
+  if (state.statusError) {
+    return `
+      <div class="alert">
+        <div class="alert-title">Não consegui carregar as confirmações</div>
+        <div class="alert-msg">${escapeHtml(state.statusError)}.<br>A lista abaixo não é a de verdade, por isso está bloqueada.</div>
+        <button class="btn secondary block" data-action="retry-status" style="margin-top:10px;">Tentar de novo</button>
+      </div>
+    `;
+  }
+  if (!state.statusLoaded) {
+    return '<div class="alert info"><div class="alert-msg">Carregando as confirmações…</div></div>';
+  }
+  if (state.saveState === 'saving') {
+    return '<div class="alert info"><div class="alert-msg">Salvando… pode continuar marcando.</div></div>';
+  }
+  if (state.saveState === 'saved') {
+    return '<div class="alert ok"><div class="alert-msg">✅ Salvo na planilha</div></div>';
+  }
+  if (state.saveState === 'error') {
+    return `
+      <div class="alert">
+        <div class="alert-title">Ainda não salvou</div>
+        <div class="alert-msg">Suas marcações estão na tela, mas não chegaram na planilha.<br>Não feche antes de salvar.</div>
+        <button class="btn secondary block" data-action="retry-save" style="margin-top:10px;">Tentar salvar de novo</button>
+      </div>
+    `;
+  }
+  return '';
+}
+
 function renderMemberRow(m, i) {
   const st = getMemberStatus(m.id);
   const s = STATUS[st.status];
   const isOpen = state.expandedMemberId === m.id;
+  const travado = !state.statusLoaded;
   return `
-    <div class="member-row">
-      <div class="member-head" data-action="toggle-member" data-id="${m.id}">
+    <div class="member-row${travado ? ' travado' : ''}">
+      <div class="member-head" ${travado ? '' : `data-action="toggle-member" data-id="${m.id}"`}>
         <div class="member-info">
           <span class="member-num">${String(i + 1).padStart(2, '0')}.</span>
           <span class="member-name">${escapeHtml(m.nome)}</span>
@@ -617,9 +819,15 @@ function checkPin() {
 async function loadReportData() {
   const encerrados = state.events.filter(e => e.status === 'encerrado');
   const missing = encerrados.filter(e => !(e.id in state.reportData));
+  state.reportError = null;
   if (missing.length) {
-    const results = await Promise.all(missing.map(e => storageGet('mc-status-' + e.id)));
-    missing.forEach((e, i) => { state.reportData[e.id] = results[i] || {}; });
+    const results = await Promise.allSettled(missing.map(e => storageGet('mc-status-' + e.id)));
+    missing.forEach((e, i) => {
+      // Um evento sem dado fica de fora de propósito: melhor mostrar traço do
+      // que um relatorio dizendo que ninguem confirmou.
+      if (results[i].status === 'fulfilled') state.reportData[e.id] = results[i].value || {};
+      else state.reportError = results[i].reason.message;
+    });
   }
   render();
 }
@@ -701,27 +909,37 @@ function renderAdminRelatorio() {
   if (encerrados.length === 0) {
     return '<div class="empty">Nenhum evento encerrado ainda.<br>Os relatórios aparecem aqui depois que você encerrar um evento.</div>';
   }
-  return encerrados.map(ev => {
+  const aviso = state.reportError ? `
+    <div class="alert">
+      <div class="alert-title">Alguns relatórios não carregaram</div>
+      <div class="alert-msg">${escapeHtml(state.reportError)}.<br>Os eventos marcados com — estão incompletos, não copie esses.</div>
+      <button class="btn secondary block" data-action="retry-report" style="margin-top:10px;">Tentar de novo</button>
+    </div>
+  ` : '';
+
+  return aviso + encerrados.map(ev => {
+    const carregado = ev.id in state.reportData;
     const counts = computeCounts(ev);
     const total = ev.memberIds.length;
     const isOpen = state.expandedReportEventId === ev.id;
+    const n = (v) => carregado ? v : '—';
     return `
       <div class="card">
-        <div class="member-head" data-action="toggle-report-event" data-id="${ev.id}">
+        <div class="member-head" ${carregado ? `data-action="toggle-report-event" data-id="${ev.id}"` : ''}>
           <div>
             <div style="font-family:'Rye',serif; font-size:17px; color:var(--white-strong);">${escapeHtml(ev.nome)}</div>
             <div style="color:var(--text-muted); font-size:12px; margin-top:5px;">${total} membros aptos</div>
           </div>
-          <span style="color:var(--text-muted); font-size:19px;">${isOpen ? '−' : '+'}</span>
+          <span style="color:var(--text-muted); font-size:19px;">${carregado ? (isOpen ? '−' : '+') : ''}</span>
         </div>
         <div class="count-grid">
-          <div class="count-box-report">✅ Confirmados <b>${counts.confirmado}</b></div>
-          <div class="count-box-report">⚠️ Não responderam <b>${counts.aguardando}</b></div>
-          <div class="count-box-report">❌ Família <b>${counts.familia}</b></div>
-          <div class="count-box-report">❌ Trabalho <b>${counts.trabalho}</b></div>
+          <div class="count-box-report">✅ Confirmados <b>${n(counts.confirmado)}</b></div>
+          <div class="count-box-report">⚠️ Não responderam <b>${n(counts.aguardando)}</b></div>
+          <div class="count-box-report">❌ Família <b>${n(counts.familia)}</b></div>
+          <div class="count-box-report">❌ Trabalho <b>${n(counts.trabalho)}</b></div>
         </div>
-        <button class="btn secondary block" data-action="copy-report" data-id="${ev.id}" style="margin-top:10px;">${state.copiedEventId === ev.id ? 'Copiado ✓' : '📋 Copiar relatório'}</button>
-        ${isOpen ? renderReportDetail(ev) : ''}
+        ${carregado ? `<button class="btn secondary block" data-action="copy-report" data-id="${ev.id}" style="margin-top:10px;">${state.copiedEventId === ev.id ? 'Copiado ✓' : '📋 Copiar relatório'}</button>` : ''}
+        ${isOpen && carregado ? renderReportDetail(ev) : ''}
       </div>
     `;
   }).join('');
@@ -881,6 +1099,10 @@ document.getElementById('app').addEventListener('click', async (e) => {
   const action = target.dataset.action;
   const id = target.dataset.id;
 
+  if (action === 'retry-load') return loadInitial();
+  if (action === 'retry-report') return loadReportData();
+  if (action === 'retry-save') return gravarAgora();
+  if (action === 'retry-status') return loadEventStatus(state.currentEventId);
   if (action === 'open-event') return openEvent(id);
   if (action === 'go-home') { state.view = 'home'; state.isAdmin = false; return render(); }
   if (action === 'go-admin-pin') { state.view = 'admin-pin'; state.pinError = false; return render(); }
@@ -938,12 +1160,12 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.newMemberDivisao = null;
     state.newMemberNome = '';
     render();
-    await storageSet('mc-roster', state.roster);
+    await salvarOuAvisar('mc-roster', state.roster);
   }
   if (action === 'remove-member') {
     state.roster = state.roster.filter(m => m.id !== id);
     render();
-    await storageSet('mc-roster', state.roster);
+    await salvarOuAvisar('mc-roster', state.roster);
   }
 
   if (action === 'start-new-event') {
@@ -980,17 +1202,17 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.newEventSelected = null;
     state.editingEventId = null;
     render();
-    await storageSet('mc-events', state.events);
+    await salvarOuAvisar('mc-events', state.events);
   }
   if (action === 'toggle-event-status') {
     state.events = state.events.map(ev => ev.id === id ? { ...ev, status: ev.status === 'encerrado' ? 'ativo' : 'encerrado' } : ev);
     render();
-    await storageSet('mc-events', state.events);
+    await salvarOuAvisar('mc-events', state.events);
   }
   if (action === 'delete-event') {
     state.events = state.events.filter(ev => ev.id !== id);
     render();
-    await storageSet('mc-events', state.events);
+    await salvarOuAvisar('mc-events', state.events);
   }
 });
 
