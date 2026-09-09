@@ -21,7 +21,7 @@
 
 // Marcador para conferir o que esta publicado de fato: basta chamar a URL do
 // Web App com ?action=versao. Subir sempre junto com as alteracoes.
-var VERSAO = '2026-09-09-e-relatorio-sob-demanda';
+var VERSAO = '2026-09-09-h-categoria-evento';
 
 var ABA_MEMBROS = 'Membros';
 var ABA_EVENTOS = 'Eventos';
@@ -30,7 +30,7 @@ var ABA_RELATORIO = 'Relatorio';
 var ABA_KV = 'KV';
 
 var CAB_MEMBROS = ['ID', 'Nome', 'Grau', 'Divisao'];
-var CAB_EVENTOS = ['ID', 'Nome', 'Data', 'Horario', 'Endereco', 'Outros', 'Status', 'Criado em'];
+var CAB_EVENTOS = ['ID', 'Nome', 'Data', 'Horario', 'Endereco', 'Outros', 'Status', 'Criado em', 'Categoria'];
 var CAB_PRESENCAS = ['ID Evento', 'Evento', 'ID Membro', 'Membro', 'Status',
                      'Direto', 'Destacado', 'Acompanhado', 'Atualizado em'];
 
@@ -106,6 +106,7 @@ function executar(action, p) {
   if (action === 'eventoSalvar') return comTrava(function () { return salvarEvento(p); });
   if (action === 'eventoRemover') return comTrava(function () { return removerEvento(p.id); });
   if (action === 'relatorio') return comTrava(function () { return atualizarRelatorio(); });
+  if (action === 'estatisticas') return { ok: true, membros: lerEstatisticasMembros() };
   throw new Error('Acao desconhecida: ' + action);
 }
 
@@ -174,6 +175,9 @@ function lerEventos() {
         outros: String(l[5] || ''),
         status: String(l[6] || 'ativo'),
         criadoEm: ehData(l[7]) ? Utilities.formatDate(l[7], fuso(), 'dd/MM/yyyy HH:mm') : String(l[7] || ''),
+        // Linhas criadas antes deste campo existir ficam sem a coluna - contam
+        // como 'divisao', que e o que elas sempre foram na pratica.
+        categoria: String(l[8] || '') === 'regional' ? 'regional' : 'divisao',
         memberIds: membrosDoEvento(String(l[0]))
       };
     });
@@ -197,6 +201,43 @@ function lerPresencas(eventoId) {
     };
   });
   return mapa;
+}
+
+// Percentual de presenca de cada membro, olhando so para eventos ja
+// encerrados: um evento ainda ativo pode ter a confirmacao mudada, entao
+// contar ele antes da hora distorceria o numero. Um membro so entra na conta
+// de um evento se estava convidado (tem linha em Presencas) - assim quem
+// entrou no clube depois de um evento antigo nao e penalizado por ele.
+function lerEstatisticasMembros() {
+  var nomes = {};
+  linhas(aba(ABA_MEMBROS, CAB_MEMBROS)).forEach(function (l) {
+    if (l[0]) nomes[String(l[0])] = String(l[1] || '');
+  });
+
+  var encerrados = {};
+  linhas(aba(ABA_EVENTOS, CAB_EVENTOS)).forEach(function (l) {
+    if (l[0] && String(l[6]) === 'encerrado') encerrados[String(l[0])] = true;
+  });
+
+  var contagem = {};
+  linhas(aba(ABA_PRESENCAS, CAB_PRESENCAS)).forEach(function (l) {
+    if (!l[0] || !l[2] || !encerrados[String(l[0])]) return;
+    var mid = String(l[2]);
+    if (!contagem[mid]) contagem[mid] = { convites: 0, confirmacoes: 0 };
+    contagem[mid].convites++;
+    if (statusParaChave(l[4]) === 'confirmado') contagem[mid].confirmacoes++;
+  });
+
+  return Object.keys(nomes).map(function (mid) {
+    var c = contagem[mid] || { convites: 0, confirmacoes: 0 };
+    return {
+      id: mid,
+      nome: nomes[mid],
+      convites: c.convites,
+      confirmacoes: c.confirmacoes,
+      percentual: c.convites ? Math.round((c.confirmacoes / c.convites) * 100) : null
+    };
+  });
 }
 
 // A planilha devolve Date quando a celula esta formatada como data; o app
@@ -282,8 +323,9 @@ function salvarEvento(p) {
   var id = p.id || novoId();
   var achado = acharLinha(s, function (l) { return String(l[0]) === String(id); });
   var criadoEm = achado ? achado.valores[7] : agora();
+  var categoria = p.categoria === 'regional' ? 'regional' : 'divisao';
   var linha = [id, p.nome, p.data || '', p.horario || '', p.endereco || '',
-               p.outros || '', p.status || 'ativo', criadoEm];
+               p.outros || '', p.status || 'ativo', criadoEm, categoria];
   if (achado) s.getRange(achado.indice, 1, 1, linha.length).setValues([linha]);
   else s.appendRow(linha);
   renomearEmPresencas(0, id, p.nome);
@@ -428,6 +470,14 @@ function atualizarRelatorio() {
       porStatus[k].sort(function (a, b) { return a.nome.localeCompare(b.nome); });
     });
 
+    // Cada participante tem uma linha em Presencas (ajustarParticipantes
+    // garante isso ao criar/editar o evento), entao contar as linhas equivale
+    // a contar os convidados - sem precisar reler a planilha de novo aqui.
+    var totalConvidados = (porEvento[ev.id] || []).length;
+    var percentualEvento = totalConvidados ? Math.round((porStatus.confirmado.length / totalConvidados) * 100) : 0;
+    formatos.push({ linha: linhasSaida.length + 1, tipo: 'percentual' });
+    linhasSaida.push([percentualEvento + '% DE PRESENCA (' + porStatus.confirmado.length + ' de ' + totalConvidados + ')', '']);
+
     ORDEM_SECOES.forEach(function (secao) {
       var lista = porStatus[secao.chave];
       linhasSaida.push(['', '']);
@@ -448,6 +498,7 @@ function atualizarRelatorio() {
     if (f.tipo === 'evento') linha.setFontWeight('bold').setFontSize(13);
     if (f.tipo === 'secao') linha.setFontWeight('bold').setFontColor('#666666');
     if (f.tipo === 'detalhe') linha.setFontColor('#888888').setFontStyle('italic');
+    if (f.tipo === 'percentual') linha.setFontWeight('bold').setFontColor('#1a7a3c');
   });
 
   s.setColumnWidth(1, 320);
