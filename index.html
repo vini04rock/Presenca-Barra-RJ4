@@ -377,6 +377,7 @@ let state = {
   reportError: null,
   relatorioState: 'idle',
   relatorioErro: null,
+  confirmDeleteId: null,
   expandedReportEventId: null,
   copiedEventId: null,
   newMemberGrau: null,
@@ -894,6 +895,13 @@ function getReportGroups(ev) {
 
 function buildReportText(ev) {
   const groups = getReportGroups(ev);
+  // Familia e trabalho sao as duas razoes de falta; juntas viram uma unica
+  // secao "nao puderam ir", com o motivo ao lado de cada nome.
+  const naoPuderamIr = [
+    ...groups.familia.map(n => ({ nome: n, motivo: 'Família' })),
+    ...groups.trabalho.map(n => ({ nome: n, motivo: 'Trabalho' })),
+  ];
+
   const lines = [];
   lines.push('📋 RELATÓRIO DE PRESENÇA');
   lines.push(ev.nome);
@@ -902,6 +910,9 @@ function buildReportText(ev) {
   lines.push('');
   lines.push(`✅ CONFIRMARAM (${groups.confirmado.length})`);
   lines.push(...(groups.confirmado.length ? groups.confirmado.map(n => '- ' + n) : ['- Ninguém confirmou']));
+  lines.push('');
+  lines.push(`❌ NÃO PUDERAM IR (${naoPuderamIr.length})`);
+  lines.push(...(naoPuderamIr.length ? naoPuderamIr.map(m => `- ${m.nome} (${m.motivo})`) : ['- Ninguém avisou falta']));
   lines.push('');
   lines.push(`⚠️ NÃO RESPONDERAM (${groups.aguardando.length})`);
   lines.push(...(groups.aguardando.length ? groups.aguardando.map(n => '- ' + n) : ['- Todos responderam']));
@@ -978,9 +989,33 @@ function renderAdminRelatorio() {
         </div>
         ${carregado ? `<button class="btn secondary block" data-action="copy-report" data-id="${ev.id}" style="margin-top:10px;">${state.copiedEventId === ev.id ? 'Copiado ✓' : '📋 Copiar relatório'}</button>` : ''}
         ${isOpen && carregado ? renderReportDetail(ev) : ''}
+        ${renderExcluirEvento(ev)}
       </div>
     `;
   }).join('');
+}
+
+// Excluir so aparece aqui, na aba Relatorio, onde so entram eventos ja
+// encerrados - e em dois toques. Na aba Eventos ficava ao lado de Editar, com
+// risco de apagar um evento ativo por engano.
+function renderExcluirEvento(ev) {
+  if (state.confirmDeleteId !== ev.id) {
+    return `
+      <button class="btn ghost block" data-action="ask-delete-event" data-id="${ev.id}" style="margin-top:8px;">
+        Excluir evento
+      </button>
+    `;
+  }
+  return `
+    <div class="alert" style="margin-top:10px;">
+      <div class="alert-title">Excluir "${escapeHtml(ev.nome)}"?</div>
+      <div class="alert-msg">Apaga o evento e as confirmações de todos os membros. Não dá para desfazer.</div>
+      <div class="row-gap" style="margin-top:10px;">
+        <button class="btn danger" data-action="delete-event" data-id="${ev.id}">Sim, excluir</button>
+        <button class="btn secondary" data-action="cancel-delete-event">Cancelar</button>
+      </div>
+    </div>
+  `;
 }
 
 function renderReportDetail(ev) {
@@ -1048,7 +1083,6 @@ function renderAdminEventos() {
           <div class="row-gap" style="margin-top:12px;">
             <button class="btn secondary" data-action="start-edit-event" data-id="${ev.id}">Editar</button>
             <button class="btn secondary" data-action="toggle-event-status" data-id="${ev.id}">${ev.status === 'encerrado' ? 'Reabrir' : 'Encerrar'}</button>
-            <button class="btn danger" data-action="delete-event" data-id="${ev.id}">Excluir</button>
           </div>
         </div>
       `;
@@ -1148,6 +1182,8 @@ document.getElementById('app').addEventListener('click', async (e) => {
   if (action === 'retry-report') return loadReportData();
   if (action === 'retry-save') return gravarAgora();
   if (action === 'gerar-relatorio') return gerarRelatorio();
+  if (action === 'ask-delete-event') { state.confirmDeleteId = id; return render(); }
+  if (action === 'cancel-delete-event') { state.confirmDeleteId = null; return render(); }
   if (action === 'retry-status') return loadEventStatus(state.currentEventId);
   if (action === 'open-event') return openEvent(id);
   if (action === 'go-home') { state.view = 'home'; state.isAdmin = false; return render(); }
@@ -1157,6 +1193,7 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.adminTab = target.dataset.tab;
     state.newEventSelected = null;
     state.editingEventId = null;
+    state.confirmDeleteId = null;
     render();
     if (target.dataset.tab === 'relatorio') await loadReportData();
     return;
@@ -1264,6 +1301,9 @@ document.getElementById('app').addEventListener('click', async (e) => {
   }
   if (action === 'delete-event') {
     state.events = state.events.filter(ev => ev.id !== id);
+    state.confirmDeleteId = null;
+    delete state.reportData[id];
+    if (state.expandedReportEventId === id) state.expandedReportEventId = null;
     render();
     await salvarOuAvisar('eventoRemover', { id });
   }
