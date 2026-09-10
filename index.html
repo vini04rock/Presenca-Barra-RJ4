@@ -512,6 +512,9 @@ let state = {
   // Chave de ESCOPOS ('barra', 'regional', ...) - qual escopo o membro esta
   // vendo na tela inicial. null = ainda na tela de escolha.
   homeEscopo: null,
+  // Um valor de TIPOS_EVENTO, ou 'todos' - qual tipo de evento esta
+  // filtrado dentro do escopo escolhido. null = ainda na tela de escolha.
+  homeTipo: null,
   roster: [],
   events: [],
   currentEventId: null,
@@ -860,6 +863,7 @@ function render() {
 
 function renderHome(app) {
   if (!state.homeEscopo) return renderHomeEscolha(app);
+  if (!state.homeTipo) return renderHomeTipos(app);
   return renderHomeEventos(app);
 }
 
@@ -892,21 +896,56 @@ function renderHomeEscolha(app) {
     }).join('')}
     <div class="footer-admin">
       <span class="btn ghost on-photo" data-action="go-divisoes">Modo organizador</span>
-      <div class="brand-tag">DIVISÃO · CONFIRMAÇÃO DE PRESENÇA</div>
+      <div class="brand-tag">Desenvolvido por: Almeida - Adm. Barra - RJ4</div>
     </div>
   `;
 }
 
-// Segundo passo: a lista de eventos ativos de dentro do escopo escolhido -
-// e a mesma tela de sempre, so que filtrada.
-function renderHomeEventos(app) {
+// Segundo passo: escolher o tipo de evento, dentro do escopo ja escolhido.
+// "Todos os eventos" entra como opcao a mais, pra eventos sem tipo marcado
+// (o campo e opcional na criacao) nao ficarem impossiveis de achar.
+function renderHomeTipos(app) {
   const nomeEscopo = escopoPorChave(state.homeEscopo).nome;
-  const activeEvents = state.events.filter(ev =>
-    ev.categoria === state.homeEscopo && ev.status !== 'encerrado');
+  const contar = (tipo) => state.events.filter(ev =>
+    ev.categoria === state.homeEscopo && ev.status !== 'encerrado' &&
+    (tipo === 'todos' || ev.tipo === tipo)).length;
+  const opcoes = [{ valor: 'todos', label: 'Todos os eventos', emoji: '📋' }]
+    .concat(TIPOS_EVENTO.map(t => ({ valor: t, label: t, emoji: emojiTipoEvento(t) })));
+
   app.innerHTML = `
-    <div class="back-link on-photo" data-action="go-home-escolha">‹ Trocar</div>
+    <div class="back-link on-photo" data-action="go-home-escolha">‹ Trocar divisão</div>
     <div class="crest-wrap" style="margin-bottom: 8px;">
       <h1 style="font-size: 21px;">${escapeHtml(nomeEscopo)}</h1>
+      <div class="sub">Escolha o tipo de evento</div>
+    </div>
+    ${opcoes.map(o => {
+      const n = contar(o.valor);
+      return `
+        <div class="card event-card" data-action="select-home-tipo" data-value="${escapeHtml(o.valor)}">
+          <div>
+            <div class="name">${o.emoji} ${escapeHtml(o.label)}</div>
+            <div class="meta">${n} ${n === 1 ? 'evento ativo' : 'eventos ativos'}</div>
+          </div>
+          <div class="arrow">›</div>
+        </div>
+      `;
+    }).join('')}
+  `;
+}
+
+// Terceiro passo: a lista de eventos ativos do escopo + tipo escolhidos -
+// e a mesma tela de sempre, so que filtrada duas vezes.
+function renderHomeEventos(app) {
+  const nomeEscopo = escopoPorChave(state.homeEscopo).nome;
+  const tipoLabel = state.homeTipo === 'todos' ? 'Todos os eventos' : state.homeTipo;
+  const activeEvents = state.events.filter(ev =>
+    ev.categoria === state.homeEscopo && ev.status !== 'encerrado' &&
+    (state.homeTipo === 'todos' || ev.tipo === state.homeTipo));
+  app.innerHTML = `
+    <div class="back-link on-photo" data-action="go-home-tipos">‹ Trocar tipo</div>
+    <div class="crest-wrap" style="margin-bottom: 8px;">
+      <h1 style="font-size: 21px;">${escapeHtml(nomeEscopo)}</h1>
+      <div class="sub">${escapeHtml(tipoLabel)}</div>
     </div>
     ${activeEvents.length === 0 ? `
       <div class="empty">
@@ -1809,8 +1848,10 @@ document.getElementById('app').addEventListener('click', async (e) => {
   if (action === 'retry-status') return loadEventStatus(state.currentEventId);
   if (action === 'open-event') return openEvent(id);
   if (action === 'go-home') { state.view = 'home'; state.isAdmin = false; state.adminEscopo = null; return render(); }
-  if (action === 'select-home-escopo') { state.homeEscopo = target.dataset.value; return render(); }
-  if (action === 'go-home-escolha') { state.homeEscopo = null; state.view = 'home'; return render(); }
+  if (action === 'select-home-escopo') { state.homeEscopo = target.dataset.value; state.homeTipo = null; return render(); }
+  if (action === 'go-home-escolha') { state.homeEscopo = null; state.homeTipo = null; state.view = 'home'; return render(); }
+  if (action === 'select-home-tipo') { state.homeTipo = target.dataset.value; return render(); }
+  if (action === 'go-home-tipos') { state.homeTipo = null; return render(); }
   if (action === 'go-rank') { state.view = 'rank'; return render(); }
   if (action === 'calcular-rank') return carregarRank();
   if (action === 'set-rank-janela') {

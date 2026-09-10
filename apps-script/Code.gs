@@ -21,7 +21,7 @@
 
 // Marcador para conferir o que esta publicado de fato: basta chamar a URL do
 // Web App com ?action=versao. Subir sempre junto com as alteracoes.
-var VERSAO = '2026-09-10-o-batch-participantes';
+var VERSAO = '2026-09-10-p-pins-novos';
 
 var ABA_MEMBROS = 'Membros';
 var ABA_EVENTOS = 'Eventos';
@@ -166,6 +166,25 @@ function configurarPinsIniciais() {
   var chaves = ['BARRA', 'OESTE', 'RECREIO', 'CURICICA', 'TAQUARA', 'GARDENIA', 'REGIONAL'];
   chaves.forEach(function (c) { props.setProperty('PIN_' + c, '0987'); });
   return 'PINs criados: ' + chaves.map(function (c) { return 'PIN_' + c; }).join(', ');
+}
+
+// Rodar UMA VEZ pelo editor do Apps Script para trocar os 7 PINs de uma vez
+// so, pelos novos valores definidos em 10/09/2026. Depois de rodar e
+// conferir que funcionou, pode apagar esta funcao (ou deixar, nao faz mal -
+// so nao roda sozinha, precisa ser chamada na mao).
+function configurarPinsNovos() {
+  var props = PropertiesService.getScriptProperties();
+  var novos = {
+    REGIONAL: '0418',
+    BARRA: '1801',
+    CURICICA: '1802',
+    GARDENIA: '1803',
+    OESTE: '1804',
+    RECREIO: '1805',
+    TAQUARA: '1806'
+  };
+  Object.keys(novos).forEach(function (c) { props.setProperty('PIN_' + c, novos[c]); });
+  return 'PINs atualizados: ' + Object.keys(novos).join(', ');
 }
 
 // ---------- ABAS ----------
