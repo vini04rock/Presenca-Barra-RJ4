@@ -21,7 +21,7 @@
 
 // Marcador para conferir o que esta publicado de fato: basta chamar a URL do
 // Web App com ?action=versao. Subir sempre junto com as alteracoes.
-var VERSAO = '2026-09-10-n-janelas-rank';
+var VERSAO = '2026-09-10-o-batch-participantes';
 
 var ABA_MEMBROS = 'Membros';
 var ABA_EVENTOS = 'Eventos';
@@ -737,11 +737,24 @@ function ajustarParticipantes(eventoId, nomeEvento, membroIds) {
   linhas(s).forEach(function (l) {
     if (String(l[0]) === String(eventoId)) atuais[String(l[2])] = true;
   });
+
+  // Uma escrita so para todos os participantes novos, em vez de uma
+  // appendRow por pessoa. Com eventos regionais grandes (dezenas de
+  // membros), gravar um por um era lento o bastante pra: (1) estourar o
+  // tempo limite no navegador, e (2) deixar uma janela longa em que uma
+  // leitura concorrente (ex.: apos aquele timeout, o app tenta recarregar
+  // sozinho) pegava a planilha no meio da escrita e via uma lista parcial.
+  var linhasNovas = [];
   membroIds.forEach(function (mid) {
     if (atuais[mid]) return;
-    s.appendRow([eventoId, nomeEvento, mid, nomeDe(ABA_MEMBROS, CAB_MEMBROS, mid),
-                 STATUS_ROTULO.aguardando, 'Nao', 'Nao', 'Nao', agora()]);
+    linhasNovas.push([eventoId, nomeEvento, mid, nomeDe(ABA_MEMBROS, CAB_MEMBROS, mid),
+                       STATUS_ROTULO.aguardando, 'Nao', 'Nao', 'Nao', agora()]);
   });
+  if (linhasNovas.length) {
+    var proximaLinha = s.getLastRow() + 1;
+    s.getRange(proximaLinha, 1, linhasNovas.length, linhasNovas[0].length).setValues(linhasNovas);
+  }
+
   var mantidos = {};
   membroIds.forEach(function (m) { mantidos[m] = true; });
   apagarLinhas(s, function (l) {
