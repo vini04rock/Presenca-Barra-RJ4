@@ -1672,8 +1672,17 @@ function renderEventForm() {
         <label>Outros (opcional)</label>
         <textarea id="new-event-outros" rows="2" placeholder="Ex: link do mapa, horário de destacamento, observações">${existing && existing.outros ? escapeHtml(existing.outros) : ''}</textarea>
       </div>
-      <label>Quem participa</label>
-      <div style="max-height: 260px; overflow-y: auto; margin-bottom: 12px;">
+      <div style="display:flex; align-items:baseline; justify-content:space-between; gap:8px;">
+        <label style="margin-bottom:0;">Quem participa</label>
+        ${elegiveis.length > 0 ? `
+          <div>
+            <span class="btn ghost" style="padding:0;" data-action="marcar-todos-membros">Marcar todos</span>
+            <span style="color:var(--text-muted);"> · </span>
+            <span class="btn ghost" style="padding:0;" data-action="desmarcar-todos-membros">Desmarcar todos</span>
+          </div>
+        ` : ''}
+      </div>
+      <div style="max-height: 260px; overflow-y: auto; margin: 5px 0 12px;">
         ${elegiveis.length === 0 ? '<div class="empty">Cadastre membros primeiro, na aba Membros.</div>' : elegiveis.map(m => `
           <div class="checkbox-row">
             <input type="checkbox" id="chk-${m.id}" data-id="${m.id}" class="new-event-checkbox" ${selected.has(m.id) ? 'checked' : ''}>
@@ -1941,6 +1950,13 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.editingEventId = null;
     state.newEventTipo = null;
     return render();
+  }
+  if (action === 'marcar-todos-membros' || action === 'desmarcar-todos-membros') {
+    // Mexe direto nos checkboxes, sem re-renderizar - o estado deles so e
+    // lido de verdade na hora de salvar (ver save-new-event).
+    const ligar = action === 'marcar-todos-membros';
+    document.querySelectorAll('.new-event-checkbox').forEach(c => { c.checked = ligar; });
+    return;
   }
   if (action === 'pick-tipo-evento') {
     state.newEventTipo = state.newEventTipo === target.dataset.value ? null : target.dataset.value;
