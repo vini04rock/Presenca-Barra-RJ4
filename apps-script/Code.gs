@@ -21,7 +21,7 @@
 
 // Marcador para conferir o que esta publicado de fato: basta chamar a URL do
 // Web App com ?action=versao. Subir sempre junto com as alteracoes.
-var VERSAO = '2026-09-10-m-tipo-evento';
+var VERSAO = '2026-09-10-n-janelas-rank';
 
 var ABA_MEMBROS = 'Membros';
 var ABA_EVENTOS = 'Eventos';
@@ -114,7 +114,7 @@ function executar(action, p) {
   });
   if (action === 'estatisticas') return { ok: true, membros: lerEstatisticasMembros(String(p.categoria || '')) };
   if (action === 'verificarPin') return verificarPin(String(p.escopo || ''), String(p.pin || ''));
-  if (action === 'rankPresenca') return { ok: true, rank: calcularRankPresenca() };
+  if (action === 'rankPresenca') return { ok: true, rank: calcularRankPresenca(String(p.janela || 'sempre')) };
   throw new Error('Acao desconhecida: ' + action);
 }
 
@@ -382,9 +382,76 @@ function dataCorte(mesesAtras) {
   return Utilities.formatDate(d, fuso(), 'yyyy-MM-dd');
 }
 
-// So o Rank publico: desde sempre, sem filtro de data.
-function calcularRankPresenca() {
-  return calcularEstatisticasPorEscopo(null);
+// Mesmo calculo de calcularEstatisticasPorEscopo, mas para varias janelas de
+// tempo de uma vez, lendo a planilha uma unica vez em vez de uma leitura por
+// janela - usado pela aba Regional RJ4, que mostra 1/3/6/12 meses juntos.
+// janelasEmMeses: lista de numeros (1, 3, 6, 12, ...); usar null na lista
+// para incluir "desde sempre". Devolve um objeto { '1': {...}, '3': {...},
+// 'sempre': {...} }, uma chave de texto por janela.
+function calcularEstatisticasVariasJanelas(janelasEmMeses) {
+  var nomePorId = {}, divisaoPorId = {};
+  linhas(aba(ABA_MEMBROS, CAB_MEMBROS)).forEach(function (l) {
+    if (!l[0]) return;
+    nomePorId[String(l[0])] = String(l[1] || '');
+    divisaoPorId[String(l[0])] = String(l[3] || '');
+  });
+
+  var eventosInfo = {};
+  linhas(aba(ABA_EVENTOS, CAB_EVENTOS)).forEach(function (l) {
+    if (!l[0] || String(l[6]) !== 'encerrado') return;
+    var cat = String(l[8] || '');
+    cat = (cat === '' || cat === 'divisao') ? 'barra' : cat;
+    eventosInfo[String(l[0])] = { categoria: cat, data: formatarData(l[2]) };
+  });
+
+  var presencas = [];
+  linhas(aba(ABA_PRESENCAS, CAB_PRESENCAS)).forEach(function (l) {
+    if (!l[0] || !l[2]) return;
+    var info = eventosInfo[String(l[0])];
+    if (!info) return;
+    presencas.push({
+      membroId: String(l[2]), categoria: info.categoria, data: info.data,
+      confirmado: statusParaChave(l[4]) === 'confirmado'
+    });
+  });
+
+  function calcularParaCorte(dataInicio) {
+    var porDivisao = {}, porMembro = {};
+    presencas.forEach(function (p) {
+      if (dataInicio && (!p.data || p.data < dataInicio)) return;
+
+      if (!porDivisao[p.categoria]) porDivisao[p.categoria] = { convites: 0, confirmacoes: 0 };
+      porDivisao[p.categoria].convites++;
+      if (p.confirmado) porDivisao[p.categoria].confirmacoes++;
+
+      if (CHAVE_POR_NOME_DIVISAO[divisaoPorId[p.membroId]] === p.categoria) {
+        if (!porMembro[p.membroId]) porMembro[p.membroId] = { convites: 0, confirmacoes: 0 };
+        porMembro[p.membroId].convites++;
+        if (p.confirmado) porMembro[p.membroId].confirmacoes++;
+      }
+    });
+
+    var divisoes = ESCOPOS_VALIDOS.map(function (chave) {
+      var c = porDivisao[chave] || { convites: 0, confirmacoes: 0 };
+      return { chave: chave, nome: ESCOPOS_NOME[chave], convites: c.convites, confirmacoes: c.confirmacoes, percentual: pctOuNulo(c) };
+    });
+    var membros = Object.keys(nomePorId).map(function (mid) {
+      var c = porMembro[mid] || { convites: 0, confirmacoes: 0 };
+      return { id: mid, nome: nomePorId[mid], divisao: divisaoPorId[mid], convites: c.convites, confirmacoes: c.confirmacoes, percentual: pctOuNulo(c) };
+    });
+    return { divisoes: divisoes, membros: membros };
+  }
+
+  var resultado = {};
+  janelasEmMeses.forEach(function (m) {
+    resultado[m === null ? 'sempre' : String(m)] = calcularParaCorte(m === null ? null : dataCorte(m));
+  });
+  return resultado;
+}
+
+// Rank publico: 'sempre' (padrao) ou '6meses'.
+function calcularRankPresenca(janela) {
+  return calcularEstatisticasPorEscopo(janela === '6meses' ? dataCorte(6) : null);
 }
 
 // Regional primeiro, depois as divisoes em ordem alfabetica - mesmo padrao
@@ -396,54 +463,78 @@ var ORDEM_EXIBICAO_ESCOPOS = ['regional', 'barra', 'curicica', 'gardenia', 'oest
 // regional junto, desde sempre (sem janela de tempo - o motor
 // calcularEstatisticasPorEscopo aceita data de corte, so nao esta sendo
 // usado aqui por enquanto; e facil religar se um dia quiser de volta).
+// 4 colunas lado a lado - 1, 3, 6 e 12 meses (sem "desde sempre" aqui, so
+// essas 4 janelas mesmo).
+var JANELAS_REGIONAL = [
+  { meses: 1, titulo: '1 MÊS' },
+  { meses: 3, titulo: '3 MESES' },
+  { meses: 6, titulo: '6 MESES' },
+  { meses: 12, titulo: '12 MESES' }
+];
+
 function atualizarAbaRegional() {
   var s = planilha().getSheetByName(ABA_REGIONAL);
   if (!s) s = planilha().insertSheet(ABA_REGIONAL);
   s.clear();
 
-  var estat = calcularEstatisticasPorEscopo(null);
-  var totalConvites = 0, totalConfirmacoes = 0;
-  estat.divisoes.forEach(function (d) { totalConvites += d.convites; totalConfirmacoes += d.confirmacoes; });
-  var totalPct = totalConvites ? Math.round((totalConfirmacoes / totalConvites) * 100) : null;
+  var porJanela = calcularEstatisticasVariasJanelas(JANELAS_REGIONAL.map(function (j) { return j.meses; }));
+  var numColunas = JANELAS_REGIONAL.length + 1;
 
   function pctTexto(v) { return (v === null || v === undefined) ? '-' : v + '%'; }
-  function porChave(chave) {
+  function porChave(estat, chave) {
     for (var i = 0; i < estat.divisoes.length; i++) if (estat.divisoes[i].chave === chave) return estat.divisoes[i];
     return null;
   }
+  function totalDe(estat) {
+    var conv = 0, conf = 0;
+    estat.divisoes.forEach(function (d) { conv += d.convites; conf += d.confirmacoes; });
+    return conv ? Math.round((conf / conv) * 100) : null;
+  }
+  function colunasVazias(n) { var a = []; for (var i = 0; i < n; i++) a.push(''); return a; }
+  function linhaVazia() { return colunasVazias(numColunas); }
 
   var linhasSaida = [];
   var formatos = [];
 
   formatos.push({ linha: linhasSaida.length + 1, tipo: 'titulo' });
-  linhasSaida.push(['REGIONAL RJ4 — RESUMO DE PRESENÇA', '']);
+  linhasSaida.push(['REGIONAL RJ4 — RESUMO DE PRESENÇA'].concat(colunasVazias(numColunas - 1)));
   formatos.push({ linha: linhasSaida.length + 1, tipo: 'detalhe' });
-  linhasSaida.push(['Gerado em ' + agora(), '']);
-  linhasSaida.push(['', '']);
+  linhasSaida.push(['Gerado em ' + agora()].concat(colunasVazias(numColunas - 1)));
+  linhasSaida.push(linhaVazia());
+
+  formatos.push({ linha: linhasSaida.length + 1, tipo: 'cabecalho' });
+  linhasSaida.push([''].concat(JANELAS_REGIONAL.map(function (j) { return j.titulo; })));
 
   formatos.push({ linha: linhasSaida.length + 1, tipo: 'total' });
-  linhasSaida.push(['🏆 RANK TOTAL REGIONAL', pctTexto(totalPct)]);
-  linhasSaida.push(['', '']);
+  linhasSaida.push(['🏆 RANK TOTAL REGIONAL'].concat(JANELAS_REGIONAL.map(function (j) {
+    return pctTexto(totalDe(porJanela[j.meses]));
+  })));
+  linhasSaida.push(linhaVazia());
 
   formatos.push({ linha: linhasSaida.length + 1, tipo: 'secao' });
-  linhasSaida.push(['% DE EFETIVO POR DIVISÃO', '']);
+  linhasSaida.push(['% DE EFETIVO POR DIVISÃO'].concat(colunasVazias(numColunas - 1)));
   ORDEM_EXIBICAO_ESCOPOS.forEach(function (chave) {
-    var e = porChave(chave);
-    linhasSaida.push([ESCOPOS_NOME[chave], pctTexto(e && e.percentual)]);
+    var linha = [ESCOPOS_NOME[chave]];
+    JANELAS_REGIONAL.forEach(function (j) {
+      var e = porChave(porJanela[j.meses], chave);
+      linha.push(pctTexto(e && e.percentual));
+    });
+    linhasSaida.push(linha);
   });
 
-  s.getRange(1, 1, linhasSaida.length, 2).setValues(linhasSaida);
+  s.getRange(1, 1, linhasSaida.length, numColunas).setValues(linhasSaida);
 
   formatos.forEach(function (f) {
-    var linha = s.getRange(f.linha, 1, 1, 2);
+    var linha = s.getRange(f.linha, 1, 1, numColunas);
     if (f.tipo === 'titulo') linha.setFontWeight('bold').setFontSize(14);
     if (f.tipo === 'detalhe') linha.setFontColor('#888888').setFontStyle('italic');
+    if (f.tipo === 'cabecalho') linha.setFontWeight('bold').setFontColor('#666666').setFontSize(10);
     if (f.tipo === 'total') linha.setFontWeight('bold').setFontSize(13).setFontColor('#1a7a3c');
     if (f.tipo === 'secao') linha.setFontWeight('bold').setFontColor('#666666');
   });
 
-  s.setColumnWidth(1, 240);
-  s.setColumnWidth(2, 100);
+  s.setColumnWidth(1, 220);
+  for (var c = 2; c <= numColunas; c++) s.setColumnWidth(c, 80);
 }
 
 // Uma aba por divisao (nao inclui Regional - a dela e so o resumo, acima).
