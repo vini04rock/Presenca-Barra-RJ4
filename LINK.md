@@ -2,10 +2,10 @@
 
 ## App — link para mandar no grupo
 
-    https://vini04rock.github.io/Presenca-Barra-RJ4/
+    https://vini04rock.github.io/Presenca-RJ4/
 
-Atenção às maiúsculas: `P` de Presenca, `B` de Barra, `RJ4` todo maiúsculo.
-O endereço diferencia maiúscula de minúscula.
+Atenção às maiúsculas: `P` de Presenca, `RJ4` todo maiúsculo. O endereço
+diferencia maiúscula de minúscula.
 
 Não precisa de conta nem instalar nada — abre no navegador do celular.
 Para virar ícone no aparelho:
@@ -13,11 +13,14 @@ Para virar ícone no aparelho:
 - iPhone: botão de compartilhar → "Adicionar à Tela de Início"
 - Android: menu ⋮ → "Adicionar à tela inicial"
 
-PIN do modo organizador: `0987` (constante `PIN` no `index.html`).
+PIN do modo organizador: cada uma das 7 divisões (Barra, Oeste, Recreio,
+Curicica, Taquara, Gardênia, Regional) tem o próprio PIN, guardado nas
+Propriedades do Script do Apps Script — não fica mais no código. O PIN do
+Regional funciona como chave-mestra, abrindo qualquer divisão.
 
 ## Repositório
 
-    https://github.com/vini04rock/Presenca-Barra-RJ4
+    https://github.com/vini04rock/Presenca-RJ4
 
 O site é publicado pelo GitHub Pages a partir da branch `main`, pasta raiz.
 Todo `git push` atualiza o site no ar em cerca de 1 minuto.
@@ -45,7 +48,14 @@ uma URL diferente e quebra o app.
 
 Abas em uso:
 
-- `Membros`, `Eventos`, `Presencas` — os dados. O app lê e grava aqui.
-- `Relatorio` — visão organizada por evento, gerada sob demanda pelo botão
-  no modo organizador ou pelo menu "Confirmacao MC" da planilha.
-- `KV` — formato antigo, mantido apenas como backup da migração.
+- `Membros`, `Eventos`, `Presencas` — os dados. O app lê e grava aqui,
+  filtrando por uma coluna de divisão/categoria (não há aba separada por
+  divisão para os dados — ver `PLANO-MULTI-DIVISAO.md`).
+- `Relatorio` — por evento, gerada sob demanda pelo botão "Gerar relatório
+  na planilha" (só aparece dentro do organizador Regional).
+- `Regional RJ4` — resumo comparativo entre divisões, em 4 janelas de
+  tempo (1/3/6/12 meses), gerada pelo mesmo botão.
+- Uma aba por divisão (`Barra - RJ4`, `Oeste - RJ4`, etc.) — integrantes e
+  % de cada um no topo, eventos e % coloridos por status embaixo. Também
+  gerada pelo mesmo botão.
+- `KV` — formato antigo, mantido apenas como backup da migração inicial.
