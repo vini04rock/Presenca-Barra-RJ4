@@ -813,6 +813,22 @@ function escapeHtml(str) {
   return d.innerHTML;
 }
 
+// Escapa o texto normalmente (mesma seguranca de sempre) e so depois
+// transforma em link o que parecer uma URL - nunca insere HTML vindo do
+// texto em si, so envolve o trecho reconhecido numa tag <a>.
+function linkify(str) {
+  const escapado = escapeHtml(str);
+  return escapado.replace(/(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi, (match) => {
+    // Pontuacao de fechamento de frase (. , ; : ! ? ) provavelmente nao faz
+    // parte do link - tira do link e devolve depois dele.
+    const corte = match.match(/[.,;:!?)\]]+$/);
+    const sufixo = corte ? corte[0] : '';
+    const url = sufixo ? match.slice(0, -sufixo.length) : match;
+    const href = /^https?:\/\//i.test(url) ? url : 'https://' + url;
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color:#9cc4ff; text-decoration:underline; word-break:break-all;">${url}</a>${sufixo}`;
+  });
+}
+
 // ---------- RENDER ----------
 
 function render() {
@@ -1146,8 +1162,8 @@ function renderEvent(app) {
       <div class="card" style="margin-bottom: 16px;">
         ${ev.data ? `<div class="info-line">🗓️ ${formatDataBR(ev.data)}</div>` : ''}
         ${ev.horario ? `<div class="info-line">⏰ ${escapeHtml(ev.horario)}</div>` : ''}
-        ${ev.endereco ? `<div class="info-line">📍 ${escapeHtml(ev.endereco)}</div>` : ''}
-        ${ev.outros ? `<div class="info-line" style="white-space: pre-wrap;">ℹ️ ${escapeHtml(ev.outros)}</div>` : ''}
+        ${ev.endereco ? `<div class="info-line">📍 ${linkify(ev.endereco)}</div>` : ''}
+        ${ev.outros ? `<div class="info-line" style="white-space: pre-wrap;">ℹ️ ${linkify(ev.outros)}</div>` : ''}
       </div>
     ` : ''}
     ${renderStatusBanner()}
