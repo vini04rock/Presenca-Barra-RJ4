@@ -1129,7 +1129,16 @@ function agruparPorDivisao(membros) {
     const chave = m.divisao || 'Sem divisão';
     (porDivisao[chave] = porDivisao[chave] || []).push(m);
   });
-  return Object.keys(porDivisao).sort((a, b) => a.localeCompare(b)).map(divisao => ({
+  // Regional no topo, depois alfabetica - mesma regra de
+  // escoposEmOrdemDeExibicao(), so que aqui os nomes vem direto dos membros
+  // (string), nao da lista ESCOPOS.
+  const nomeRegional = escopoPorChave('regional').nome;
+  const ordenadas = Object.keys(porDivisao).sort((a, b) => {
+    if (a === nomeRegional) return -1;
+    if (b === nomeRegional) return 1;
+    return a.localeCompare(b);
+  });
+  return ordenadas.map(divisao => ({
     divisao,
     membros: ordenarPorHierarquia(porDivisao[divisao])
   }));
