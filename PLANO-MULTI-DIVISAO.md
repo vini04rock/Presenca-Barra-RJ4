@@ -21,6 +21,31 @@ não se perder entre uma conversa e outra.
   entrar numa divisão, o organizador só vê e edita os membros e eventos
   **daquela** divisão — sem trocar de site, sem sair do app.
 
+## Já implementado (passo intermediário, com uma planilha só)
+
+Antes da reescrita grande acontecer, alguns pedaços dela já foram
+adiantados, de um jeito que funciona hoje mesmo com uma unica aba
+`Membros`/`Eventos`/`Presencas` compartilhada:
+
+- Todo evento tem uma **categoria** real (`divisao` ou `regional`),
+  gravada na planilha - não é filtro por nome, é um campo de verdade.
+- O "Modo organizador" já tem os dois botões, **Barra - RJ4** e
+  **Regional RJ4** (mesmo PIN por enquanto). A categoria do evento vem
+  automaticamente de qual botão o organizador entrou.
+- A tela inicial dos membros já pede pra escolher entre Barra e Regional
+  antes de mostrar os eventos ativos.
+- O botão **"Gerar relatório na planilha"** (que reescreve a aba
+  `Relatorio` inteira, cobrindo todas as categorias juntas) só aparece
+  dentro do Regional - é uma ação de quem enxerga o quadro geral, não do
+  dia a dia de cada divisão. Cada divisão usa o "Copiar relatório" (por
+  evento, texto pronto pro WhatsApp), que continua disponível nas duas.
+
+O que **ainda não** existe, e só faz sentido junto com a reescrita grande
+(abas por divisão): a lista de **membros** continua uma só, compartilhada
+entre Barra e Regional. Ver a seção de participantes de evento, logo
+abaixo, para a regra já combinada de como isso vai funcionar quando as
+abas por divisão existirem.
+
 ## Como a planilha fica
 
 Em vez de uma coluna "Divisão" dentro de abas compartilhadas, a divisão vira
@@ -67,6 +92,22 @@ RECREIO - RJ4
   ...
 ```
 
+## Quem participa de um evento
+
+Decidido: a lista de "quem participa", que aparece ao criar ou editar um
+evento, depende de onde o evento está sendo criado:
+
+- **Evento de divisão** (ex.: criado dentro do Barra) → a lista mostra só
+  os membros **daquela divisão** - vem da aba `Membros - Barra`, sozinha.
+- **Evento regional** (criado dentro do Regional) → a lista mostra os
+  membros de **todas as divisões juntas** - a união de `Membros - Barra`,
+  `Membros - Recreio`, `Membros - Gardênia`, `Membros - Leste`.
+
+Isso não dá pra implementar de verdade enquanto existir uma unica aba de
+membros (a filtragem não teria nada real pra filtrar, e ficaria sem uso
+até existir uma segunda divisão de membros pra testar contra). Fica pronto
+pra ligar assim que as abas por divisão da seção seguinte existirem.
+
 ## Por que abas em vez de uma tabela só com coluna "Divisão"
 
 - Reaproveita quase sem alteração o código que já existe (`lerMembros`,
@@ -98,19 +139,59 @@ RECREIO - RJ4
   reconsiderar onde eles ficam guardados (ideia: o `Code.gs` valida o PIN
   do lado do servidor, em vez do `index.html` comparar um valor fixo).
 
+## Percentual de presença, separado por categoria
+
+Decidido: a aba **Presenças (%)** do organizador passa a olhar só para
+eventos da categoria de quem está vendo -
+
+- Dentro do **Barra**, o percentual de cada membro conta só os eventos
+  de categoria `divisao` (os da própria Barra).
+- Dentro do **Regional**, o percentual conta só os eventos de categoria
+  `regional`.
+
+E essa visão Regional passa a aparecer **também no app**, não só na
+planilha (diferente do que a primeira versão deste documento cogitava,
+de deixar só na planilha para quem for consultar).
+
+Diferente da lista de "quem participa de um evento" (que depende das
+abas por divisão ainda não existirem), isso **já dá pra implementar
+agora**: a categoria do evento já é um campo real, com dados de verdade
+dos dois tipos, e o cálculo de percentual (`lerEstatisticasMembros` no
+`Code.gs`) só precisa aprender a filtrar por ela.
+
+### Onde isso aparece: botão "Rank de Presença", público
+
+Decidido também o lugar exato: um botão **"🏆 Rank de Presença"** na tela
+inicial (a mesma tela onde o membro escolhe entre Barra e Regional),
+logo abaixo do subtítulo "RJ4" e acima da linha divisória. Diferente do
+"Modo organizador", esse botão **não pede PIN** — qualquer membro que
+abrir o link pode ver.
+
+A tela que ele abre mostra dois blocos:
+
+- **Percentual geral de cada divisão** (quando existir mais de uma) - o
+  quanto cada divisão confirma presença, em média, nos próprios eventos.
+- **Percentual de cada membro**, dentro da divisão dele - a mesma lista
+  que já existe hoje na aba Presenças do organizador, só que pública.
+
+Com uma unica divisão (Barra) ainda ativa, o bloco por divisão fica sem
+muito sentido (só teria uma linha) - ele passa a valer a pena quando a
+Recreio ou outra entrar. Já o percentual por membro da Barra pode
+aparecer desde já, assim que a categoria dos eventos estiver
+corretamente filtrada (ver acima).
+
+## Perguntas já resolvidas
+
+- **Eventos entre divisões** (tipo o "Bate e Volta Regional RJ4"): viram
+  eventos de categoria `regional`, criados dentro do botão Regional — já
+  funciona hoje, ver "Já implementado" acima.
+- **Cadastro de membro**: acontece de dentro da divisão certa, porque o
+  organizador entrou nela primeiro — sem escolher a divisão na mão. Já é
+  assim hoje (todo membro cadastrado herda a divisão de quem cadastrou).
+- **Quem participa de um evento**: ver a seção "Quem participa de um
+  evento", acima.
+
 ## Perguntas em aberto pra quando chegar a hora
 
-- **Eventos entre divisões** (tipo o "Bate e Volta Regional RJ4" que já
-  existe hoje): fica cadastrado em qual aba de Eventos? A resposta mais
-  simples é criar uma divisão "virtual" `Regional` com as próprias abas de
-  Eventos/Presencas, só pra esse tipo de evento — evita forçar ele dentro
-  de uma divisão só.
-- **Cadastro de membro**: ele escolhe a divisão dele no cadastro (a tela
-  que existia antes de simplificar pra só Barra), ou o cadastro já acontece
-  de dentro da divisão certa, porque o organizador entrou nela primeiro?
-  A segunda opção parece mais natural, dado que o organizador de cada
-  divisão só mexe na própria.
-- **Quem entra na aba `Regional RJ4`**: só percentual, como já decidido —
-  mas vale confirmar se algum dia isso precisa ficar visível pro clube
-  inteiro (ex.: um card na tela inicial do app) ou se fica só na planilha,
-  pra quem for de fato consultar.
+Nenhuma no momento — todas as levantadas até aqui foram respondidas acima.
+Novas perguntas entram aqui conforme aparecerem.

@@ -21,16 +21,17 @@
 
 // Marcador para conferir o que esta publicado de fato: basta chamar a URL do
 // Web App com ?action=versao. Subir sempre junto com as alteracoes.
-var VERSAO = '2026-09-09-h-categoria-evento';
+var VERSAO = '2026-09-10-m-tipo-evento';
 
 var ABA_MEMBROS = 'Membros';
 var ABA_EVENTOS = 'Eventos';
 var ABA_PRESENCAS = 'Presencas';
 var ABA_RELATORIO = 'Relatorio';
+var ABA_REGIONAL = 'Regional RJ4';
 var ABA_KV = 'KV';
 
-var CAB_MEMBROS = ['ID', 'Nome', 'Grau', 'Divisao'];
-var CAB_EVENTOS = ['ID', 'Nome', 'Data', 'Horario', 'Endereco', 'Outros', 'Status', 'Criado em', 'Categoria'];
+var CAB_MEMBROS = ['ID', 'Nome', 'Grau', 'Divisao', 'Funcoes'];
+var CAB_EVENTOS = ['ID', 'Nome', 'Data', 'Horario', 'Endereco', 'Outros', 'Status', 'Criado em', 'Categoria', 'Tipo'];
 var CAB_PRESENCAS = ['ID Evento', 'Evento', 'ID Membro', 'Membro', 'Status',
                      'Direto', 'Destacado', 'Acompanhado', 'Atualizado em'];
 
@@ -105,8 +106,15 @@ function executar(action, p) {
   if (action === 'membroRemover') return comTrava(function () { return removerMembro(p.id); });
   if (action === 'eventoSalvar') return comTrava(function () { return salvarEvento(p); });
   if (action === 'eventoRemover') return comTrava(function () { return removerEvento(p.id); });
-  if (action === 'relatorio') return comTrava(function () { return atualizarRelatorio(); });
-  if (action === 'estatisticas') return { ok: true, membros: lerEstatisticasMembros() };
+  if (action === 'relatorio') return comTrava(function () {
+    atualizarRelatorio();
+    atualizarAbaRegional();
+    atualizarAbasDivisoes();
+    return { ok: true };
+  });
+  if (action === 'estatisticas') return { ok: true, membros: lerEstatisticasMembros(String(p.categoria || '')) };
+  if (action === 'verificarPin') return verificarPin(String(p.escopo || ''), String(p.pin || ''));
+  if (action === 'rankPresenca') return { ok: true, rank: calcularRankPresenca() };
   throw new Error('Acao desconhecida: ' + action);
 }
 
@@ -119,6 +127,45 @@ function comTrava(fn) {
   } finally {
     trava.releaseLock();
   }
+}
+
+// ---------- PIN ----------
+// Os PINs ficam nas Propriedades do Script (Apps Script > Configuracoes do
+// projeto > Propriedades do script) - nunca no codigo que roda no
+// navegador, entao nao da pra achar "ver codigo-fonte". Trocar um PIN e so
+// editar o valor da propriedade correspondente, sem mexer em codigo.
+var ESCOPOS_VALIDOS = ['barra', 'oeste', 'recreio', 'curicica', 'taquara', 'gardenia', 'regional'];
+// Espelha a lista ESCOPOS do index.html (chave -> nome). Se uma divisao for
+// renomeada la, atualizar aqui tambem.
+var ESCOPOS_NOME = {
+  barra: 'Barra - RJ4', oeste: 'Oeste - RJ4', recreio: 'Recreio - RJ4',
+  curicica: 'Curicica - RJ4', taquara: 'Taquara - RJ4', gardenia: 'Gardênia - RJ4',
+  regional: 'Regional RJ4'
+};
+
+// O app nunca compara PIN sozinho - manda o que a pessoa digitou pra ca, e
+// so recebe de volta se bateu ou nao. Assim o valor certo nunca trafega
+// para fora do servidor.
+function verificarPin(escopo, pinDigitado) {
+  if (ESCOPOS_VALIDOS.indexOf(escopo) === -1 || !pinDigitado) return { ok: true, valido: false };
+  var props = PropertiesService.getScriptProperties();
+  var pinRegional = props.getProperty('PIN_REGIONAL') || '';
+  // O PIN do Regional e chave-mestra: abre qualquer divisao, alem da propria.
+  if (pinRegional && pinDigitado === pinRegional) return { ok: true, valido: true };
+  var pinEscopo = props.getProperty('PIN_' + escopo.toUpperCase()) || '';
+  return { ok: true, valido: !!pinEscopo && pinDigitado === pinEscopo };
+}
+
+// Rodar UMA VEZ pelo editor do Apps Script (selecionar esta funcao no menu
+// de funcoes, no topo, e clicar em Executar) para criar os 7 PINs, todos
+// comecando iguais ao PIN unico de hoje. Depois disso, trocar um PIN e so
+// editar a propriedade correspondente em Configuracoes do projeto >
+// Propriedades do script - nao precisa rodar esta funcao de novo.
+function configurarPinsIniciais() {
+  var props = PropertiesService.getScriptProperties();
+  var chaves = ['BARRA', 'OESTE', 'RECREIO', 'CURICICA', 'TAQUARA', 'GARDENIA', 'REGIONAL'];
+  chaves.forEach(function (c) { props.setProperty('PIN_' + c, '0987'); });
+  return 'PINs criados: ' + chaves.map(function (c) { return 'PIN_' + c; }).join(', ');
 }
 
 // ---------- ABAS ----------
@@ -157,7 +204,13 @@ function lerMembros() {
   return linhas(aba(ABA_MEMBROS, CAB_MEMBROS))
     .filter(function (l) { return l[0]; })
     .map(function (l) {
-      return { id: String(l[0]), nome: String(l[1]), grau: String(l[2] || ''), divisao: String(l[3] || '') };
+      return {
+        id: String(l[0]), nome: String(l[1]), grau: String(l[2] || ''), divisao: String(l[3] || ''),
+        // Guardado como texto separado por virgula, igual a lista de
+        // participantes de um evento - cresce sem precisar de coluna nova
+        // a cada funcao que o app ganhar no futuro.
+        funcoes: String(l[4] || '').split(',').map(function (f) { return f.trim(); }).filter(Boolean)
+      };
     });
 }
 
@@ -175,9 +228,15 @@ function lerEventos() {
         outros: String(l[5] || ''),
         status: String(l[6] || 'ativo'),
         criadoEm: ehData(l[7]) ? Utilities.formatDate(l[7], fuso(), 'dd/MM/yyyy HH:mm') : String(l[7] || ''),
-        // Linhas criadas antes deste campo existir ficam sem a coluna - contam
-        // como 'divisao', que e o que elas sempre foram na pratica.
-        categoria: String(l[8] || '') === 'regional' ? 'regional' : 'divisao',
+        // Linhas gravadas antes de existirem varias divisoes tem 'divisao'
+        // ou nada - nessa epoca so a Barra existia, entao viram 'barra'.
+        // Categorias novas guardam a divisao especifica (recreio, oeste,
+        // regional, ...) direto, sem tradução nenhuma.
+        categoria: (function () {
+          var raw = String(l[8] || '');
+          return (raw === '' || raw === 'divisao') ? 'barra' : raw;
+        })(),
+        tipo: String(l[9] || ''),
         memberIds: membrosDoEvento(String(l[0]))
       };
     });
@@ -208,15 +267,21 @@ function lerPresencas(eventoId) {
 // contar ele antes da hora distorceria o numero. Um membro so entra na conta
 // de um evento se estava convidado (tem linha em Presencas) - assim quem
 // entrou no clube depois de um evento antigo nao e penalizado por ele.
-function lerEstatisticasMembros() {
+// So os membros daquela divisao entram na conta - sem isso, o organizador
+// da Barra veria (e o percentual incluiria) gente de outra divisao.
+function lerEstatisticasMembros(categoria) {
+  var nomeDivisao = ESCOPOS_NOME[categoria] || '';
   var nomes = {};
   linhas(aba(ABA_MEMBROS, CAB_MEMBROS)).forEach(function (l) {
-    if (l[0]) nomes[String(l[0])] = String(l[1] || '');
+    if (l[0] && (!nomeDivisao || String(l[3] || '') === nomeDivisao)) nomes[String(l[0])] = String(l[1] || '');
   });
 
   var encerrados = {};
   linhas(aba(ABA_EVENTOS, CAB_EVENTOS)).forEach(function (l) {
-    if (l[0] && String(l[6]) === 'encerrado') encerrados[String(l[0])] = true;
+    if (!l[0] || String(l[6]) !== 'encerrado') return;
+    var cat = String(l[8] || '');
+    cat = (cat === '' || cat === 'divisao') ? 'barra' : cat;
+    if (!categoria || cat === categoria) encerrados[String(l[0])] = true;
   });
 
   var contagem = {};
@@ -237,6 +302,234 @@ function lerEstatisticasMembros() {
       confirmacoes: c.confirmacoes,
       percentual: c.convites ? Math.round((c.confirmacoes / c.convites) * 100) : null
     };
+  });
+}
+
+var CHAVE_POR_NOME_DIVISAO = (function () {
+  var mapa = {};
+  Object.keys(ESCOPOS_NOME).forEach(function (chave) { mapa[ESCOPOS_NOME[chave]] = chave; });
+  return mapa;
+})();
+
+function pctOuNulo(c) { return c.convites ? Math.round((c.confirmacoes / c.convites) * 100) : null; }
+
+// Motor compartilhado do Rank publico e da aba Regional RJ4 da planilha:
+// confirmados/convidados por divisao (nos proprios eventos encerrados) e por
+// membro (so dentro dos eventos da propria divisao - um membro convidado
+// para um evento regional nao mistura essa presenca na % pessoal dele).
+// dataInicio (yyyy-mm-dd) filtra so eventos a partir dali; null = sem
+// filtro, desde sempre.
+function calcularEstatisticasPorEscopo(dataInicio) {
+  var nomePorId = {}, divisaoPorId = {};
+  linhas(aba(ABA_MEMBROS, CAB_MEMBROS)).forEach(function (l) {
+    if (!l[0]) return;
+    nomePorId[String(l[0])] = String(l[1] || '');
+    divisaoPorId[String(l[0])] = String(l[3] || '');
+  });
+
+  var categoriaPorEvento = {};
+  linhas(aba(ABA_EVENTOS, CAB_EVENTOS)).forEach(function (l) {
+    if (!l[0] || String(l[6]) !== 'encerrado') return;
+    if (dataInicio) {
+      var dataEv = formatarData(l[2]);
+      if (!dataEv || dataEv < dataInicio) return;
+    }
+    var cat = String(l[8] || '');
+    categoriaPorEvento[String(l[0])] = (cat === '' || cat === 'divisao') ? 'barra' : cat;
+  });
+
+  var porDivisao = {}, porMembro = {};
+  linhas(aba(ABA_PRESENCAS, CAB_PRESENCAS)).forEach(function (l) {
+    if (!l[0] || !l[2]) return;
+    var cat = categoriaPorEvento[String(l[0])];
+    if (!cat) return;
+    var mid = String(l[2]);
+    var confirmado = statusParaChave(l[4]) === 'confirmado';
+
+    if (!porDivisao[cat]) porDivisao[cat] = { convites: 0, confirmacoes: 0 };
+    porDivisao[cat].convites++;
+    if (confirmado) porDivisao[cat].confirmacoes++;
+
+    // So conta pra % pessoal se o evento e da mesma categoria da divisao do
+    // membro - senao, um membro convidado por um evento regional teria essa
+    // presenca misturada na propria % da divisao dele.
+    if (CHAVE_POR_NOME_DIVISAO[divisaoPorId[mid]] === cat) {
+      if (!porMembro[mid]) porMembro[mid] = { convites: 0, confirmacoes: 0 };
+      porMembro[mid].convites++;
+      if (confirmado) porMembro[mid].confirmacoes++;
+    }
+  });
+
+  var divisoes = ESCOPOS_VALIDOS.map(function (chave) {
+    var c = porDivisao[chave] || { convites: 0, confirmacoes: 0 };
+    return { chave: chave, nome: ESCOPOS_NOME[chave], convites: c.convites, confirmacoes: c.confirmacoes, percentual: pctOuNulo(c) };
+  });
+
+  var membros = Object.keys(nomePorId).map(function (mid) {
+    var c = porMembro[mid] || { convites: 0, confirmacoes: 0 };
+    return {
+      id: mid, nome: nomePorId[mid], divisao: divisaoPorId[mid],
+      convites: c.convites, confirmacoes: c.confirmacoes, percentual: pctOuNulo(c)
+    };
+  });
+
+  return { divisoes: divisoes, membros: membros };
+}
+
+function dataCorte(mesesAtras) {
+  var d = new Date();
+  d.setMonth(d.getMonth() - mesesAtras);
+  return Utilities.formatDate(d, fuso(), 'yyyy-MM-dd');
+}
+
+// So o Rank publico: desde sempre, sem filtro de data.
+function calcularRankPresenca() {
+  return calcularEstatisticasPorEscopo(null);
+}
+
+// Regional primeiro, depois as divisoes em ordem alfabetica - mesmo padrao
+// usado em todo o app.
+var ORDEM_EXIBICAO_ESCOPOS = ['regional', 'barra', 'curicica', 'gardenia', 'oeste', 'recreio', 'taquara'];
+
+// So chamada de dentro do Regional (via o botao "Gerar relatorio na
+// planilha", que so aparece la). So o resumo - % de cada divisao e o total
+// regional junto, desde sempre (sem janela de tempo - o motor
+// calcularEstatisticasPorEscopo aceita data de corte, so nao esta sendo
+// usado aqui por enquanto; e facil religar se um dia quiser de volta).
+function atualizarAbaRegional() {
+  var s = planilha().getSheetByName(ABA_REGIONAL);
+  if (!s) s = planilha().insertSheet(ABA_REGIONAL);
+  s.clear();
+
+  var estat = calcularEstatisticasPorEscopo(null);
+  var totalConvites = 0, totalConfirmacoes = 0;
+  estat.divisoes.forEach(function (d) { totalConvites += d.convites; totalConfirmacoes += d.confirmacoes; });
+  var totalPct = totalConvites ? Math.round((totalConfirmacoes / totalConvites) * 100) : null;
+
+  function pctTexto(v) { return (v === null || v === undefined) ? '-' : v + '%'; }
+  function porChave(chave) {
+    for (var i = 0; i < estat.divisoes.length; i++) if (estat.divisoes[i].chave === chave) return estat.divisoes[i];
+    return null;
+  }
+
+  var linhasSaida = [];
+  var formatos = [];
+
+  formatos.push({ linha: linhasSaida.length + 1, tipo: 'titulo' });
+  linhasSaida.push(['REGIONAL RJ4 — RESUMO DE PRESENÇA', '']);
+  formatos.push({ linha: linhasSaida.length + 1, tipo: 'detalhe' });
+  linhasSaida.push(['Gerado em ' + agora(), '']);
+  linhasSaida.push(['', '']);
+
+  formatos.push({ linha: linhasSaida.length + 1, tipo: 'total' });
+  linhasSaida.push(['🏆 RANK TOTAL REGIONAL', pctTexto(totalPct)]);
+  linhasSaida.push(['', '']);
+
+  formatos.push({ linha: linhasSaida.length + 1, tipo: 'secao' });
+  linhasSaida.push(['% DE EFETIVO POR DIVISÃO', '']);
+  ORDEM_EXIBICAO_ESCOPOS.forEach(function (chave) {
+    var e = porChave(chave);
+    linhasSaida.push([ESCOPOS_NOME[chave], pctTexto(e && e.percentual)]);
+  });
+
+  s.getRange(1, 1, linhasSaida.length, 2).setValues(linhasSaida);
+
+  formatos.forEach(function (f) {
+    var linha = s.getRange(f.linha, 1, 1, 2);
+    if (f.tipo === 'titulo') linha.setFontWeight('bold').setFontSize(14);
+    if (f.tipo === 'detalhe') linha.setFontColor('#888888').setFontStyle('italic');
+    if (f.tipo === 'total') linha.setFontWeight('bold').setFontSize(13).setFontColor('#1a7a3c');
+    if (f.tipo === 'secao') linha.setFontWeight('bold').setFontColor('#666666');
+  });
+
+  s.setColumnWidth(1, 240);
+  s.setColumnWidth(2, 100);
+}
+
+// Uma aba por divisao (nao inclui Regional - a dela e so o resumo, acima).
+// Topo: cada integrante e a % dele, desde sempre. Embaixo: cada evento
+// daquela divisao e a % de presenca dele, com o nome em vermelho se o
+// evento ja encerrou e em verde se ainda esta ativo.
+var CHAVES_DIVISOES_DETALHE = ['barra', 'oeste', 'recreio', 'curicica', 'taquara', 'gardenia'];
+
+function atualizarAbasDivisoes() {
+  var estat = calcularEstatisticasPorEscopo(null);
+
+  var todosEventos = lerEventos();
+  var eventosPorCategoria = {};
+  todosEventos.forEach(function (ev) {
+    var cat = ev.categoria || 'barra';
+    (eventosPorCategoria[cat] = eventosPorCategoria[cat] || []).push(ev);
+  });
+
+  // Uma leitura so da aba Presencas, reaproveitada pelas 6 divisoes.
+  var presencasPorEvento = {};
+  linhas(aba(ABA_PRESENCAS, CAB_PRESENCAS)).forEach(function (l) {
+    if (!l[0] || !l[2]) return;
+    var eid = String(l[0]);
+    if (!presencasPorEvento[eid]) presencasPorEvento[eid] = { confirmados: 0, total: 0 };
+    presencasPorEvento[eid].total++;
+    if (statusParaChave(l[4]) === 'confirmado') presencasPorEvento[eid].confirmados++;
+  });
+
+  CHAVES_DIVISOES_DETALHE.forEach(function (chave) {
+    var nomeAba = ESCOPOS_NOME[chave];
+    var s = planilha().getSheetByName(nomeAba);
+    if (!s) s = planilha().insertSheet(nomeAba);
+    s.clear();
+
+    var linhasSaida = [];
+    var formatos = [];
+
+    formatos.push({ linha: linhasSaida.length + 1, tipo: 'titulo' });
+    linhasSaida.push([nomeAba.toUpperCase(), '']);
+    formatos.push({ linha: linhasSaida.length + 1, tipo: 'detalhe' });
+    linhasSaida.push(['Gerado em ' + agora(), '']);
+    linhasSaida.push(['', '']);
+
+    formatos.push({ linha: linhasSaida.length + 1, tipo: 'secao' });
+    linhasSaida.push(['INTEGRANTES', '']);
+    var membrosDaDivisao = estat.membros
+      .filter(function (m) { return m.divisao === nomeAba; })
+      .sort(function (a, b) { return a.nome.localeCompare(b.nome); });
+    if (!membrosDaDivisao.length) {
+      linhasSaida.push(['(nenhum membro cadastrado)', '']);
+    } else {
+      membrosDaDivisao.forEach(function (m) {
+        linhasSaida.push([m.nome, m.percentual === null ? '-' : m.percentual + '%']);
+      });
+    }
+
+    linhasSaida.push(['', '']);
+    formatos.push({ linha: linhasSaida.length + 1, tipo: 'secao' });
+    linhasSaida.push(['EVENTOS', '']);
+
+    var eventosDaDivisao = (eventosPorCategoria[chave] || []).slice()
+      .sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
+
+    if (!eventosDaDivisao.length) {
+      linhasSaida.push(['(nenhum evento criado)', '']);
+    } else {
+      eventosDaDivisao.forEach(function (ev) {
+        var c = presencasPorEvento[ev.id] || { confirmados: 0, total: 0 };
+        var pct = c.total ? Math.round((c.confirmados / c.total) * 100) : 0;
+        formatos.push({ linha: linhasSaida.length + 1, tipo: ev.status === 'encerrado' ? 'eventoEncerrado' : 'eventoAtivo' });
+        linhasSaida.push([ev.nome, pct + '%']);
+      });
+    }
+
+    s.getRange(1, 1, linhasSaida.length, 2).setValues(linhasSaida);
+    formatos.forEach(function (f) {
+      if (f.tipo === 'titulo') s.getRange(f.linha, 1, 1, 2).setFontWeight('bold').setFontSize(14);
+      if (f.tipo === 'detalhe') s.getRange(f.linha, 1, 1, 2).setFontColor('#888888').setFontStyle('italic');
+      if (f.tipo === 'secao') s.getRange(f.linha, 1, 1, 2).setFontWeight('bold').setFontColor('#666666');
+      // So o nome do evento fica colorido - a % ao lado continua na cor padrao.
+      if (f.tipo === 'eventoEncerrado') s.getRange(f.linha, 1).setFontColor('#c0392b');
+      if (f.tipo === 'eventoAtivo') s.getRange(f.linha, 1).setFontColor('#1a7a3c');
+    });
+
+    s.setColumnWidth(1, 260);
+    s.setColumnWidth(2, 90);
   });
 }
 
@@ -303,7 +596,7 @@ function salvarMembro(p) {
   if (!p.nome) throw new Error('Faltou o nome');
   var s = aba(ABA_MEMBROS, CAB_MEMBROS);
   var id = p.id || novoId();
-  var linha = [id, p.nome, p.grau || '', p.divisao || ''];
+  var linha = [id, p.nome, p.grau || '', p.divisao || '', p.funcoes || ''];
   var achado = acharLinha(s, function (l) { return String(l[0]) === String(id); });
   if (achado) s.getRange(achado.indice, 1, 1, linha.length).setValues([linha]);
   else s.appendRow(linha);
@@ -323,9 +616,9 @@ function salvarEvento(p) {
   var id = p.id || novoId();
   var achado = acharLinha(s, function (l) { return String(l[0]) === String(id); });
   var criadoEm = achado ? achado.valores[7] : agora();
-  var categoria = p.categoria === 'regional' ? 'regional' : 'divisao';
+  var categoria = String(p.categoria || 'barra');
   var linha = [id, p.nome, p.data || '', p.horario || '', p.endereco || '',
-               p.outros || '', p.status || 'ativo', criadoEm, categoria];
+               p.outros || '', p.status || 'ativo', criadoEm, categoria, p.tipo || ''];
   if (achado) s.getRange(achado.indice, 1, 1, linha.length).setValues([linha]);
   else s.appendRow(linha);
   renomearEmPresencas(0, id, p.nome);
