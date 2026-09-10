@@ -213,6 +213,31 @@
     margin-top: 6px;
     border-radius: var(--radius);
   }
+  .event-header-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .event-header-row .count-box { margin-top: 0; }
+  .confirm-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid var(--white-strong);
+    background: transparent;
+    color: var(--white-strong);
+    padding: 2px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: 'IBM Plex Sans', sans-serif;
+    letter-spacing: 0.02em;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .confirm-toggle-btn:active { opacity: 0.8; }
+  .confirmado-divisao { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
   .member-row {
     border-bottom: 1px solid var(--line);
     padding: 13px 0;
@@ -477,6 +502,12 @@ function escoposEmOrdemDeExibicao() {
   });
 }
 
+// So as 6 divisoes, sem Regional - o Insight e coisa de quem esta na base,
+// nao da diretoria regional (ver calcularEstatisticasInsights no Code.gs).
+function divisoesSemRegional() {
+  return escoposEmOrdemDeExibicao().filter(e => e.chave !== 'regional');
+}
+
 const STATUS = {
   aguardando: { emoji: '⚠️', label: 'Aguardando' },
   confirmado: { emoji: '✅', label: 'Confirmado' },
@@ -561,6 +592,25 @@ let state = {
   rankError: null,
   rankExpandedDivisoes: new Set(),
   newMemberNome: '',
+
+  // Rank de Insights (publico, tela inicial).
+  insightRankData: null,
+  insightRankLoading: false,
+  insightRankError: null,
+  insightRankExpandedDivisoes: new Set(),
+
+  // Aba Insights, dentro do organizador Regional.
+  insightStats: null,
+  insightStatsLoading: false,
+  insightStatsError: null,
+  insightRodadasHistorico: null,
+  insightMarcacoes: {},
+  insightExpandedDivisoes: new Set(),
+  insightSalvando: false,
+  insightErro: null,
+  insightResultado: null,
+  insightConfirmDeleteRodadaId: null,
+  insightMostrarExcluidos: false,
 };
 
 function genId() {
@@ -795,6 +845,52 @@ async function gerarRelatorio() {
   }
 }
 
+async function confirmarInsightRodada() {
+  state.insightSalvando = true;
+  state.insightErro = null;
+  render();
+  try {
+    const r = await api('insightSalvar', { marcacoes: JSON.stringify(state.insightMarcacoes) });
+    state.insightResultado = { percentual: r.percentual, totalSim: r.totalSim, totalElegiveis: r.totalElegiveis };
+    await loadInsightStats();
+  } catch (e) {
+    state.insightErro = e.message;
+  }
+  state.insightSalvando = false;
+  render();
+}
+
+async function excluirInsightRodada(id) {
+  state.insightConfirmDeleteRodadaId = null;
+  try {
+    await api('insightRodadaRemover', { id });
+    await loadInsightStats();
+  } catch (e) {
+    state.insightErro = e.message;
+    render();
+  }
+}
+
+async function removerMembroInsight(id) {
+  try {
+    await api('insightMembroRemover', { id });
+    await loadInsightStats();
+  } catch (e) {
+    state.insightErro = e.message;
+    render();
+  }
+}
+
+async function reincluirMembroInsight(id) {
+  try {
+    await api('insightMembroReincluir', { id });
+    await loadInsightStats();
+  } catch (e) {
+    state.insightErro = e.message;
+    render();
+  }
+}
+
 function gravarAgora() {
   if (!Object.keys(pendentes).length) return;
   clearTimeout(timerGravacao);
@@ -855,7 +951,9 @@ function render() {
   }
   if (state.view === 'home') return renderHome(app);
   if (state.view === 'event') return renderEvent(app);
+  if (state.view === 'confirmados') return renderConfirmados(app);
   if (state.view === 'rank') return renderRank(app);
+  if (state.view === 'rank-insights') return renderRankInsights(app);
   if (state.view === 'admin-divisoes') return renderDivisoes(app);
   if (state.view === 'admin-pin') return renderPin(app);
   if (state.view === 'admin') return renderAdmin(app);
@@ -880,7 +978,10 @@ function renderHomeEscolha(app) {
       <h1>Confirmação de Presença</h1>
       <div class="sub">RJ4</div>
     </div>
-    <div class="btn ghost on-photo" data-action="go-rank" style="display:block; text-align:center; margin: 0 auto 14px; width: fit-content;">🏆 Rank de Presença</div>
+    <div class="row-gap" style="justify-content:center; margin: 0 auto 14px; width: fit-content;">
+      <div class="btn ghost on-photo" data-action="go-rank">🏆 Rank de Presença</div>
+      <div class="btn ghost on-photo" data-action="go-rank-insights">💡 Rank de Insights</div>
+    </div>
     <div class="ring-divider"></div>
     ${escoposEmOrdemDeExibicao().map(e => {
       const n = contarAtivos(e.chave);
@@ -1077,6 +1178,104 @@ function renderRankConteudo(d) {
   return cardTotal + blocoDivisoes + blocoMembros;
 }
 
+// Rank de Insights - publico, sem PIN, carrega sozinho ao abrir a tela (nao
+// tem botao "calcular" como o Rank de Presenca, porque insightEstatisticas
+// e leve o bastante pra nao precisar esperar o toque).
+async function carregarRankInsights() {
+  state.insightRankLoading = true;
+  state.insightRankError = null;
+  render();
+  try {
+    state.insightRankData = await api('insightEstatisticas');
+  } catch (e) {
+    state.insightRankError = e.message;
+  }
+  state.insightRankLoading = false;
+  render();
+}
+
+function renderRankInsights(app) {
+  app.innerHTML = `
+    <div class="back-link on-photo" data-action="go-home-escolha">‹ Voltar</div>
+    <div class="crest-wrap" style="margin-bottom: 8px;">
+      <h1 style="font-size: 21px;">💡 Rank de Insights</h1>
+    </div>
+    ${state.insightRankError ? `
+      <div class="alert">
+        <div class="alert-title">Não consegui calcular</div>
+        <div class="alert-msg">${escapeHtml(state.insightRankError)}.</div>
+        <button class="btn secondary block" data-action="go-rank-insights" style="margin-top:10px;">Tentar de novo</button>
+      </div>
+    ` : ''}
+    ${state.insightRankLoading ? '<div class="alert info"><div class="alert-msg">Calculando…</div></div>' : ''}
+    ${!state.insightRankLoading && state.insightRankData ? renderRankInsightsConteudo(state.insightRankData) : ''}
+  `;
+}
+
+function renderRankInsightsConteudo(d) {
+  const porChave = chave => d.divisoes.find(x => x.chave === chave);
+  const linhaPct = v => v === null || v === undefined ? '—' : v + '%';
+
+  const totalRodadas = d.membros.reduce((soma, m) => soma + m.rodadas, 0);
+  const totalConfirmacoes = d.membros.reduce((soma, m) => soma + m.confirmacoes, 0);
+  const totalPct = totalRodadas ? Math.round((totalConfirmacoes / totalRodadas) * 100) : null;
+
+  const cardTotal = `
+    <div class="card" style="padding: 14px 16px; margin-bottom:12px; border-color: var(--line-strong);">
+      <div class="member-row" style="border-bottom:none; padding:0;">
+        <div class="member-head" style="cursor:default;">
+          <span class="member-name" style="font-family:'Rye',serif; font-size:17px;">💡 Rank Total de Insights</span>
+          <span class="status-badge status-confirmado" style="font-size:15px; padding:7px 14px;">${linhaPct(totalPct)}</span>
+        </div>
+      </div>
+      <div style="color:var(--text-muted); font-size:12px; margin-top:8px;">${d.rodadas} ${d.rodadas === 1 ? 'rodada registrada' : 'rodadas registradas'}</div>
+    </div>
+  `;
+
+  const blocoDivisoes = `
+    <div class="card" style="padding: 4px 16px; margin-bottom:16px;">
+      ${divisoesSemRegional().map(e => {
+        const item = porChave(e.chave);
+        return `
+          <div class="member-row">
+            <div class="member-head">
+              <span class="member-name">${escapeHtml(e.nome)}</span>
+              <span class="status-badge status-confirmado">${linhaPct(item && item.percentual)}</span>
+            </div>
+            <div style="color:var(--text-muted); font-size:11.5px; margin-top:3px;">${item ? item.mediaPorRodada : 0}/${item ? item.mediaTotalPorRodada : 0} fazem, em média, por rodada</div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  const blocoMembros = divisoesSemRegional().map(e => {
+    const membros = d.membros
+      .filter(m => m.divisao === e.nome)
+      .sort((a, b) => (b.percentual ?? -1) - (a.percentual ?? -1) || a.nome.localeCompare(b.nome));
+    const aberto = state.insightRankExpandedDivisoes.has(e.chave);
+    return `
+      <div class="card" style="padding: 4px 16px;">
+        <div class="division-subheader clicavel" data-action="toggle-insight-rank-divisao" data-value="${e.chave}">
+          <span>${aberto ? '▾' : '▸'} ${escapeHtml(e.nome.toUpperCase())}</span>
+          <span class="division-counts">${membros.length} ${membros.length === 1 ? 'membro' : 'membros'}</span>
+        </div>
+        ${aberto ? (membros.length === 0 ? '<div class="empty">Nenhum membro cadastrado.</div>' : membros.map(m => `
+          <div class="member-row">
+            <div class="member-head">
+              <span class="member-name">${escapeHtml(m.nome)}</span>
+              <span class="status-badge status-confirmado">${linhaPct(m.percentual)}</span>
+            </div>
+            <div style="color:var(--text-muted); font-size:11.5px; margin-top:3px;">${m.rodadas ? `${m.confirmacoes} de ${m.rodadas} rodadas` : 'Sem rodadas ainda'}</div>
+          </div>
+        `).join('')) : ''}
+      </div>
+    `;
+  }).join('');
+
+  return cardTotal + blocoDivisoes + blocoMembros;
+}
+
 async function openEvent(id) {
   // Descarrega o que ficou pendente do evento anterior antes de trocar.
   if (Object.keys(pendentes).length) {
@@ -1191,6 +1390,50 @@ function renderListaMembros(ev, members) {
   return ordenarPorHierarquia(members).map((m, i) => renderMemberRow(m, i)).join('');
 }
 
+// Tela cheia (nao um painel dentro do evento) com quem ja confirmou -
+// mesmo visual da lista de membros (numero, nome, grau, selos de
+// funcao/direto/destacado/acompanhado), mais a divisao embaixo, que so faz
+// sentido aparecer aqui (na lista principal ja da pra ver pelo agrupamento).
+function renderConfirmados(app) {
+  const ev = state.events.find(e => e.id === state.currentEventId);
+  if (!ev) { state.view = 'home'; return renderHome(app); }
+  const members = ev.memberIds
+    .map(id => state.roster.find(m => m.id === id))
+    .filter(Boolean);
+  const confirmados = ordenarPorHierarquia(members.filter(m => getMemberStatus(m.id).status === 'confirmado'));
+
+  app.innerHTML = `
+    <div class="back-link on-photo" data-action="close-confirmados">‹ ${escapeHtml(ev.nome)}</div>
+    <div class="event-header">
+      <h1>✅ Confirmados</h1>
+      <div class="count-box">${confirmados.length}/${members.length} CONFIRMADOS</div>
+    </div>
+    <div class="card" style="padding: 4px 16px;">
+      ${confirmados.length === 0 ? '<div class="empty">Ninguém confirmou ainda.</div>' : confirmados.map((m, i) => renderConfirmadoRow(m, i)).join('')}
+    </div>
+  `;
+}
+
+function renderConfirmadoRow(m, i) {
+  const st = getMemberStatus(m.id);
+  return `
+    <div class="member-row">
+      <div class="member-info-wrap">
+        <div class="member-info">
+          <span class="member-num">${String(i + 1).padStart(2, '0')}.</span>
+          <span class="member-name">${escapeHtml(m.nome)}</span>
+          ${m.grau ? `<span class="grade-box">${escapeHtml(m.grau)}</span>` : ''}
+          ${st.direto ? '<span title="Direto">🚀</span>' : ''}
+          ${st.destacado ? '<span title="Voluntário destacado">🚧</span>' : ''}
+          ${st.acompanhado ? '<span title="Acompanhado">🐯</span>' : ''}
+        </div>
+        ${linhaFuncoes(m.funcoes)}
+        <div class="confirmado-divisao">${escapeHtml(m.divisao || '—')}</div>
+      </div>
+    </div>
+  `;
+}
+
 function renderEvent(app) {
   const ev = state.events.find(e => e.id === state.currentEventId);
   if (!ev) { state.view = 'home'; return renderHome(app); }
@@ -1199,12 +1442,18 @@ function renderEvent(app) {
     .filter(Boolean);
 
   const hasInfo = ev.data || ev.horario || ev.endereco || ev.outros;
+  const confirmados = members.filter(m => getMemberStatus(m.id).status === 'confirmado');
 
   app.innerHTML = `
     <div class="back-link on-photo" data-action="go-home">‹ Todos os eventos</div>
     <div class="event-header">
       <h1>${escapeHtml(ev.nome)}</h1>
-      <div class="count-box">${members.length} MEMBROS</div>
+      <div class="event-header-row">
+        <div class="count-box">${members.length} MEMBROS</div>
+        <button class="confirm-toggle-btn" data-action="toggle-confirmados">
+          ✅ ${confirmados.length}/${members.length}
+        </button>
+      </div>
     </div>
     ${hasInfo ? `
       <div class="card" style="margin-bottom: 16px;">
@@ -1399,6 +1648,30 @@ async function loadEstatisticas() {
   render();
 }
 
+// Carrega as estatisticas (% de cada um + medias por divisao) e o historico
+// curto de rodadas juntos. As marcacoes comecam tudo zerado (ninguem fez) -
+// o administrador so marca quem fez, que costuma ser menos toque que marcar
+// todo mundo e desmarcar quem faltou.
+async function loadInsightStats() {
+  state.insightStatsLoading = true;
+  state.insightStatsError = null;
+  render();
+  try {
+    const [stats, hist] = await Promise.all([
+      api('insightEstatisticas'),
+      api('insightRodadas'),
+    ]);
+    state.insightStats = stats;
+    state.insightRodadasHistorico = hist.rodadas || [];
+    state.insightMarcacoes = {};
+    stats.membros.forEach(m => { state.insightMarcacoes[m.id] = false; });
+  } catch (e) {
+    state.insightStatsError = e.message;
+  }
+  state.insightStatsLoading = false;
+  render();
+}
+
 function renderAdminPresencas() {
   if (state.estatisticasError) {
     return `
@@ -1451,6 +1724,131 @@ function renderAdminPresencas() {
         </div>
       `;
     }).join('')}
+  `;
+}
+
+// Aba Insights - so aparece dentro do Regional (ver renderAdmin). Lista de
+// marcacao agrupada por divisao, ordenada pelo % historico de cada um
+// (maior primeiro), com o cabecalho de cada divisao mostrando a media de
+// participantes por rodada. Confirmar grava tudo em lote no servidor e
+// zera as marcacoes pra proxima rodada.
+function renderAdminInsights() {
+  if (state.insightStatsError) {
+    return `
+      <div class="alert">
+        <div class="alert-title">Não consegui carregar</div>
+        <div class="alert-msg">${escapeHtml(state.insightStatsError)}.</div>
+        <button class="btn secondary block" data-action="retry-insight-stats" style="margin-top:10px;">Tentar de novo</button>
+      </div>
+    `;
+  }
+  if (state.insightStatsLoading || !state.insightStats) {
+    return '<div class="alert info"><div class="alert-msg">Carregando dados do insight…</div></div>';
+  }
+
+  const d = state.insightStats;
+  const porChave = chave => d.divisoes.find(x => x.chave === chave);
+
+  const resultado = state.insightResultado ? `
+    <div class="alert ok" style="margin-bottom:16px;">
+      <div class="alert-msg">✅ Rodada registrada: ${state.insightResultado.totalSim}/${state.insightResultado.totalElegiveis} fizeram o insight (${state.insightResultado.percentual}%)</div>
+    </div>
+  ` : '';
+
+  const erro = state.insightErro ? `
+    <div class="alert" style="margin-bottom:16px;">
+      <div class="alert-title">Algo deu errado</div>
+      <div class="alert-msg">${escapeHtml(state.insightErro)}.</div>
+    </div>
+  ` : '';
+
+  const blocoMarcacao = divisoesSemRegional().map(e => {
+    const item = porChave(e.chave);
+    const membros = d.membros
+      .filter(m => m.divisao === e.nome)
+      .sort((a, b) => (b.percentual ?? -1) - (a.percentual ?? -1) || a.nome.localeCompare(b.nome));
+    const aberto = state.insightExpandedDivisoes.has(e.chave);
+    return `
+      <div class="card" style="padding: 4px 16px; margin-bottom:12px;">
+        <div class="division-subheader clicavel" data-action="toggle-insight-divisao-grupo" data-value="${e.chave}">
+          <span>${aberto ? '▾' : '▸'} ${escapeHtml(e.nome.toUpperCase())}</span>
+          <span class="division-counts">${item ? item.mediaPorRodada : 0}/${item ? item.mediaTotalPorRodada : 0} por rodada &nbsp;·&nbsp; <b>${item && item.percentual !== null ? item.percentual + '%' : '—'}</b></span>
+        </div>
+        ${aberto ? (membros.length === 0 ? '<div class="empty">Nenhum membro cadastrado.</div>' : membros.map(m => {
+          const marcado = !!state.insightMarcacoes[m.id];
+          return `
+            <div class="member-row">
+              <div class="member-head" data-action="toggle-insight-marca" data-id="${m.id}">
+                <div class="member-info-wrap">
+                  <span class="member-name">${escapeHtml(m.nome)}</span>
+                  <div style="color:var(--text-muted); font-size:11.5px; margin-top:2px;">${m.rodadas ? `${m.percentual}% (${m.confirmacoes} de ${m.rodadas} rodadas)` : 'Sem rodadas ainda'}</div>
+                </div>
+                <span class="status-badge ${marcado ? 'status-confirmado' : 'status-aguardando'}">${marcado ? '✅ Fez' : '⬜ Não fez'}</span>
+              </div>
+              <button class="btn ghost" data-action="insight-remover-membro" data-id="${m.id}" style="margin-top:6px; padding:4px 10px; font-size:11px;">Remover da lista</button>
+            </div>
+          `;
+        }).join('')) : ''}
+      </div>
+    `;
+  }).join('');
+
+  const historico = (state.insightRodadasHistorico || []).length === 0 ? '' : `
+    <div class="card" style="padding: 4px 16px; margin-top:8px; margin-bottom:16px;">
+      <div class="division-subheader" style="padding-top:12px;"><span>ÚLTIMAS RODADAS</span></div>
+      ${state.insightRodadasHistorico.map(r => `
+        <div class="member-row">
+          <div class="member-head" style="cursor:default;">
+            <div>
+              <span class="member-name">${formatDataBR(r.data)}</span>
+              <div style="color:var(--text-muted); font-size:11.5px; margin-top:2px;">${r.totalSim}/${r.totalElegiveis} fizeram · ${r.percentual}%</div>
+            </div>
+            ${state.insightConfirmDeleteRodadaId === r.id ? `
+              <span class="row-gap">
+                <button class="btn danger" style="padding:6px 10px; font-size:12px;" data-action="delete-insight-rodada" data-id="${r.id}">Excluir</button>
+                <button class="btn secondary" style="padding:6px 10px; font-size:12px;" data-action="cancel-delete-insight-rodada">Cancelar</button>
+              </span>
+            ` : `
+              <button class="btn ghost" style="padding:6px 10px; font-size:12px;" data-action="ask-delete-insight-rodada" data-id="${r.id}">Excluir</button>
+            `}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  const excluidos = d.excluidos || [];
+  const blocoExcluidos = `
+    <div class="card" style="padding: 4px 16px; margin-bottom:16px;">
+      <div class="division-subheader clicavel" data-action="toggle-insight-excluidos">
+        <span>${state.insightMostrarExcluidos ? '▾' : '▸'} FORA DO INSIGHT</span>
+        <span class="division-counts">${excluidos.length}</span>
+      </div>
+      ${state.insightMostrarExcluidos ? (excluidos.length === 0 ? '<div class="empty">Ninguém foi removido.</div>' : excluidos.map(m => `
+        <div class="member-row">
+          <div class="member-head">
+            <div>
+              <span class="member-name">${escapeHtml(m.nome)}</span>
+              <div style="color:var(--text-muted); font-size:11.5px; margin-top:2px;">${escapeHtml(m.divisao || '—')}</div>
+            </div>
+            <button class="btn ghost" style="padding:6px 10px; font-size:12px;" data-action="insight-reincluir-membro" data-id="${m.id}">Voltar a participar</button>
+          </div>
+        </div>
+      `).join('')) : ''}
+    </div>
+  `;
+
+  return `
+    <div class="alert info" style="margin-bottom:16px;">
+      <div class="alert-msg">Marque quem fez o insight nessa rodada e confirme no final. Quem não participa mais, use "Remover da lista".</div>
+    </div>
+    ${resultado}${erro}
+    ${blocoMarcacao}
+    <button class="btn block" data-action="confirmar-insight-rodada" style="margin-bottom:16px;" ${state.insightSalvando ? 'disabled' : ''}>
+      ${state.insightSalvando ? 'Confirmando…' : '✅ Confirmar rodada'}
+    </button>
+    ${historico}
+    ${blocoExcluidos}
   `;
 }
 
@@ -1637,6 +2035,9 @@ function renderAdmin(app) {
       <div class="tab ${state.adminTab === 'membros' ? 'active' : ''}" data-action="admin-tab" data-tab="membros">Membros</div>
       <div class="tab ${state.adminTab === 'relatorio' ? 'active' : ''}" data-action="admin-tab" data-tab="relatorio">Relatório</div>
       <div class="tab ${state.adminTab === 'presencas' ? 'active' : ''}" data-action="admin-tab" data-tab="presencas">Presenças</div>
+      ${state.adminEscopo === 'regional' ? `
+        <div class="tab ${state.adminTab === 'insights' ? 'active' : ''}" data-action="admin-tab" data-tab="insights">Insights</div>
+      ` : ''}
     </div>
     <div id="admin-content"></div>
   `;
@@ -1647,6 +2048,8 @@ function renderAdmin(app) {
     content.innerHTML = renderAdminRelatorio();
   } else if (state.adminTab === 'presencas') {
     content.innerHTML = renderAdminPresencas();
+  } else if (state.adminTab === 'insights' && state.adminEscopo === 'regional') {
+    content.innerHTML = renderAdminInsights();
   } else {
     content.innerHTML = renderAdminMembros();
   }
@@ -1850,6 +2253,7 @@ document.getElementById('app').addEventListener('click', async (e) => {
   if (action === 'retry-load') return loadInitial();
   if (action === 'retry-report') return loadReportData();
   if (action === 'retry-estatisticas') return loadEstatisticas();
+  if (action === 'retry-insight-stats') return loadInsightStats();
   if (action === 'retry-save') return gravarAgora();
   if (action === 'gerar-relatorio') return gerarRelatorio();
   if (action === 'ask-delete-event') { state.confirmDeleteId = id; return render(); }
@@ -1875,6 +2279,16 @@ document.getElementById('app').addEventListener('click', async (e) => {
     else state.rankExpandedDivisoes.add(chave);
     return render();
   }
+  if (action === 'go-rank-insights') {
+    state.view = 'rank-insights';
+    return carregarRankInsights();
+  }
+  if (action === 'toggle-insight-rank-divisao') {
+    const chave = target.dataset.value;
+    if (state.insightRankExpandedDivisoes.has(chave)) state.insightRankExpandedDivisoes.delete(chave);
+    else state.insightRankExpandedDivisoes.add(chave);
+    return render();
+  }
   if (action === 'go-divisoes') { state.view = 'admin-divisoes'; return render(); }
   if (action === 'select-divisao') {
     state.adminEscopo = target.dataset.value;
@@ -1892,11 +2306,32 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.newMemberNome = '';
     state.newMemberGrau = null;
     state.newMemberFuncoes = new Set();
+    state.insightConfirmDeleteRodadaId = null;
+    state.insightResultado = null;
+    state.insightMostrarExcluidos = false;
     render();
     if (target.dataset.tab === 'relatorio') await loadReportData();
     if (target.dataset.tab === 'presencas') await loadEstatisticas();
+    if (target.dataset.tab === 'insights') await loadInsightStats();
     return;
   }
+  if (action === 'toggle-insight-marca') {
+    state.insightMarcacoes[id] = !state.insightMarcacoes[id];
+    return render();
+  }
+  if (action === 'toggle-insight-divisao-grupo') {
+    const chave = target.dataset.value;
+    if (state.insightExpandedDivisoes.has(chave)) state.insightExpandedDivisoes.delete(chave);
+    else state.insightExpandedDivisoes.add(chave);
+    return render();
+  }
+  if (action === 'confirmar-insight-rodada') return confirmarInsightRodada();
+  if (action === 'ask-delete-insight-rodada') { state.insightConfirmDeleteRodadaId = id; return render(); }
+  if (action === 'cancel-delete-insight-rodada') { state.insightConfirmDeleteRodadaId = null; return render(); }
+  if (action === 'delete-insight-rodada') return excluirInsightRodada(id);
+  if (action === 'insight-remover-membro') return removerMembroInsight(id);
+  if (action === 'insight-reincluir-membro') return reincluirMembroInsight(id);
+  if (action === 'toggle-insight-excluidos') { state.insightMostrarExcluidos = !state.insightMostrarExcluidos; return render(); }
   if (action === 'toggle-report-event') {
     state.expandedReportEventId = state.expandedReportEventId === id ? null : id;
     return render();
@@ -1911,6 +2346,8 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.expandedMemberId = state.expandedMemberId === id ? null : id;
     return render();
   }
+  if (action === 'toggle-confirmados') { state.view = 'confirmados'; return render(); }
+  if (action === 'close-confirmados') { state.view = 'event'; return render(); }
   if (action === 'toggle-divisao-grupo') {
     const nome = target.dataset.value;
     if (state.expandedDivisoes.has(nome)) state.expandedDivisoes.delete(nome);
