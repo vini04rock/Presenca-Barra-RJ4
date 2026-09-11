@@ -717,6 +717,9 @@ let state = {
   // tudo fechado - senao o Regional com "Todas as divisões" vira uma
   // lista sem fim de nomes de cara).
   relatorioEstatisticasExpandidas: new Set(),
+  // Mesma ideia, para a aba Eventos agrupada por divisao (Regional +
+  // "Todas as divisões").
+  relatorioEventosExpandidos: new Set(),
   // Janela (em meses) de cada donut do painel de Presenca - uma chave por
   // grafico ('total' + um por TIPOS_EVENTO), cada um navega o proprio
   // periodo independente dos outros.
@@ -2415,9 +2418,60 @@ function membrosVisiveisRelatorio() {
   return state.roster.filter(m => m.divisao === nomeFiltro);
 }
 
+function renderCardEvento(ev) {
+  const pct = ev.status === 'encerrado' && state.reportData[ev.id]
+    ? (() => { const c = computeCounts(ev); const total = ev.memberIds.length;
+                return total ? Math.round((c.confirmado / total) * 100) : 0; })()
+    : null;
+  return `
+    <div class="card event-card" data-action="open-event" data-id="${ev.id}">
+      <div>
+        <div class="name">${escapeHtml(ev.nome)}</div>
+        <div class="meta">${ev.data ? formatDataBR(ev.data) + ' · ' : ''}${ev.status === 'encerrado' ? 'Encerrado' : 'Ativo'}${pct !== null ? ' · ' + pct + '% presença' : ''}</div>
+      </div>
+      <div class="arrow">›</div>
+    </div>
+  `;
+}
+
+// Lista de eventos agrupada por divisao - so faz sentido no Regional com
+// "Todas as divisões", onde os eventos vem de categorias diferentes e senao
+// nao da pra saber de qual divisao e cada um so olhando o nome. Mesmo
+// padrao visual/comportamento (cabecalho recolhivel, comeca fechado) de
+// renderListaEstatisticasPorDivisao.
+function renderEventosAgrupados(eventos) {
+  const porDivisao = {};
+  eventos.forEach(ev => {
+    const nomeDivisao = escopoPorChave(ev.categoria).nome;
+    (porDivisao[nomeDivisao] = porDivisao[nomeDivisao] || []).push(ev);
+  });
+  const nomeRegional = escopoPorChave('regional').nome;
+  const ordenadas = Object.keys(porDivisao).sort((a, b) => {
+    if (a === nomeRegional) return -1;
+    if (b === nomeRegional) return 1;
+    return a.localeCompare(b);
+  });
+  return `
+    <div class="card" style="padding: 4px 16px;">
+      ${ordenadas.map(divisao => {
+        const itens = porDivisao[divisao];
+        const aberto = state.relatorioEventosExpandidos.has(divisao);
+        return `
+          <div class="division-subheader clicavel" data-action="toggle-relatorio-eventos-divisao" data-value="${escapeHtml(divisao)}">
+            <span>${aberto ? '▾' : '▸'} ${escapeHtml(divisao.toUpperCase())}</span>
+            <span class="division-counts">${itens.length} ${itens.length === 1 ? 'evento' : 'eventos'}</span>
+          </div>
+          ${aberto ? itens.map(renderCardEvento).join('') : ''}
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
 function conteudoRelatorioEventos() {
   const eventos = eventosDoRelatorioEscopo();
   if (!eventos.length) return '<div class="empty">Nenhum evento ainda nessa divisão.</div>';
+  const agrupar = state.relatorioEscopo === 'regional' && state.relatorioFiltroDivisao === 'todas';
   return `
     ${state.reportError ? `
       <div class="alert" style="margin-bottom:14px;">
@@ -2426,23 +2480,11 @@ function conteudoRelatorioEventos() {
         <button class="btn secondary block" data-action="retry-relatorio-eventos" style="margin-top:10px;">Tentar de novo</button>
       </div>
     ` : ''}
-    <div class="card" style="padding: 4px 16px;">
-      ${eventos.map(ev => {
-        const pct = ev.status === 'encerrado' && state.reportData[ev.id]
-          ? (() => { const c = computeCounts(ev); const total = ev.memberIds.length;
-                      return total ? Math.round((c.confirmado / total) * 100) : 0; })()
-          : null;
-        return `
-          <div class="card event-card" data-action="open-event" data-id="${ev.id}">
-            <div>
-              <div class="name">${escapeHtml(ev.nome)}</div>
-              <div class="meta">${ev.data ? formatDataBR(ev.data) + ' · ' : ''}${ev.status === 'encerrado' ? 'Encerrado' : 'Ativo'}${pct !== null ? ' · ' + pct + '% presença' : ''}</div>
-            </div>
-            <div class="arrow">›</div>
-          </div>
-        `;
-      }).join('')}
-    </div>
+    ${agrupar ? renderEventosAgrupados(eventos) : `
+      <div class="card" style="padding: 4px 16px;">
+        ${eventos.map(renderCardEvento).join('')}
+      </div>
+    `}
   `;
 }
 
@@ -3497,6 +3539,12 @@ document.getElementById('app').addEventListener('click', async (e) => {
     else state.relatorioEstatisticasExpandidas.add(chave);
     return render();
   }
+  if (action === 'toggle-relatorio-eventos-divisao') {
+    const chave = target.dataset.value;
+    if (state.relatorioEventosExpandidos.has(chave)) state.relatorioEventosExpandidos.delete(chave);
+    else state.relatorioEventosExpandidos.add(chave);
+    return render();
+  }
   if (action === 'set-relatorio-periodo-tipo') {
     state.relatorioPeriodoPorGrafico[target.dataset.chave] = Number(target.dataset.value);
     return render();
@@ -3576,6 +3624,7 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.relatorioTipoDetalhe = null;
     state.relatorioFiltroDivisao = 'todas';
     state.relatorioEstatisticasExpandidas = new Set();
+    state.relatorioEventosExpandidos = new Set();
     return render();
   }
   if (action === 'select-relatorio-divisao') {
