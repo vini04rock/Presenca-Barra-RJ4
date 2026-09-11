@@ -53,7 +53,14 @@ var STATUS_ROTULO = {
   aguardando: 'Aguardando',
   confirmado: 'Confirmado',
   familia: 'Familia',
-  trabalho: 'Trabalho'
+  trabalho: 'Trabalho',
+  // Usados so pela importacao de convocacao colada (ver criarEventoDeTexto) -
+  // o picker manual do evento continua com só os 4 de cima (STATUS_PICKER_KEYS
+  // no index.html). "infracional" cobre tanto quem tem falta sem justificativa
+  // quanto quem nao respondeu a convocacao (mesmo tratamento, por decisao do
+  // clube).
+  infracional: 'Infracional',
+  justificada: 'Justificada'
 };
 
 function statusParaChave(rotulo) {
@@ -118,6 +125,7 @@ function executar(action, p) {
   if (action === 'membroSalvar') return comTrava(function () { return salvarMembro(p); });
   if (action === 'membroRemover') return comTrava(function () { return removerMembro(p.id); });
   if (action === 'eventoSalvar') return comTrava(function () { return salvarEvento(p); });
+  if (action === 'criarEventoDeTexto') return comTrava(function () { return criarEventoDeTexto(p); });
   if (action === 'eventoRemover') return comTrava(function () { return removerEvento(p.id); });
   if (action === 'relatorio') return comTrava(function () {
     atualizarRelatorio();
@@ -925,6 +933,61 @@ function ajustarParticipantes(eventoId, nomeEvento, membroIds) {
   apagarLinhas(s, function (l) {
     return String(l[0]) === String(eventoId) && !mantidos[String(l[2])];
   });
+}
+
+// Igual a ajustarParticipantes, mas usada pela importacao de convocacao
+// colada (criarEventoDeTexto): cada participante ja entra com o status e as
+// flags que o parser leu do texto, em vez de sempre "Aguardando". membros e
+// uma lista de { id, status, direto, destacado, acompanhado }.
+function ajustarParticipantesComStatus(eventoId, nomeEvento, membros) {
+  var s = aba(ABA_PRESENCAS, CAB_PRESENCAS);
+  var atuais = {};
+  linhas(s).forEach(function (l) {
+    if (String(l[0]) === String(eventoId)) atuais[String(l[2])] = true;
+  });
+
+  var linhasNovas = [];
+  membros.forEach(function (m) {
+    if (atuais[m.id]) return;
+    linhasNovas.push([
+      eventoId, nomeEvento, m.id, nomeDe(ABA_MEMBROS, CAB_MEMBROS, m.id),
+      STATUS_ROTULO[m.status] || STATUS_ROTULO.aguardando,
+      simNao(ehVerdadeiro(m.direto)),
+      simNao(ehVerdadeiro(m.destacado)),
+      simNao(ehVerdadeiro(m.acompanhado)),
+      agora()
+    ]);
+  });
+  if (linhasNovas.length) {
+    var proximaLinha = s.getLastRow() + 1;
+    s.getRange(proximaLinha, 1, linhasNovas.length, linhasNovas[0].length).setValues(linhasNovas);
+  }
+
+  var mantidos = {};
+  membros.forEach(function (m) { mantidos[m.id] = true; });
+  apagarLinhas(s, function (l) {
+    return String(l[0]) === String(eventoId) && !mantidos[String(l[2])];
+  });
+}
+
+// Acao unica usada pela tela "Relatorios" (colar convocacao): cria o evento
+// e ja grava todas as presencas com o status lido do texto, numa unica
+// trava/round-trip - se isso fosse feito como salvarEvento + N chamadas de
+// presenca (uma por membro), uma falha de rede no meio deixaria o evento
+// criado com so parte das presencas gravadas, sem meio de tentar de novo so
+// o que faltou.
+function criarEventoDeTexto(p) {
+  if (!p.nome) throw new Error('Faltou o nome do evento');
+  // Chega pelo doPost (corpo JSON de verdade, ver apiPost no index.html), nao
+  // pela URL como as outras acoes - entao p.membros ja e um array, sem
+  // precisar de parseOuVazio (que e para quando o dado vem como string).
+  var membros = Array.isArray(p.membros) ? p.membros : parseOuVazio(p.membros, []);
+  var eventoResp = salvarEvento({
+    id: p.id, nome: p.nome, data: p.data, horario: p.horario,
+    endereco: p.endereco, outros: p.outros, status: p.status, categoria: p.categoria, tipo: p.tipo
+  });
+  ajustarParticipantesComStatus(eventoResp.id, p.nome, membros);
+  return { ok: true, id: eventoResp.id };
 }
 
 function renomearEmPresencas(coluna, id, nome) {

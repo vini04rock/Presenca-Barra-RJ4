@@ -378,6 +378,11 @@
     cursor: pointer;
   }
   .tab.active { color: var(--white-strong); border-color: var(--white-strong); }
+  /* So pra tela de Relatorios, que tem mais abas (7) do que cabe numa linha
+     so - quebra em varias linhas em vez de espremer o texto, sem mexer no
+     .tabs/.tab padrao (usado tambem pelo Modo organizador, com menos abas). */
+  .tabs-wrap { flex-wrap: wrap; }
+  .tabs-wrap .tab { flex: 1 1 30%; min-width: 90px; padding: 8px 6px; font-size: 12px; }
   .checkbox-row {
     display: flex;
     align-items: center;
@@ -420,6 +425,43 @@
     overflow: hidden;
   }
   .presenca-barra-fill { height: 100%; background: var(--white-strong); }
+
+  /* Grafico de barras horizontal (aba Presenca > % por evento) e o medidor de
+     % total - mesma linguagem visual das barras de presenca por membro
+     acima (trilho em --surface-alt, preenchimento em --white-strong), so
+     maior. Ponta arredondada so no lado que cresce; a base fica quadrada. */
+  .chart-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
+  .chart-row-label { flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chart-row-track { flex: 1 1 55%; height: 16px; background: var(--surface-alt); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .chart-row-fill { height: 100%; background: var(--white-strong); border-radius: 0 var(--radius) var(--radius) 0; }
+  .chart-row-value { flex: 0 0 auto; width: 40px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 13px; color: var(--white-strong); }
+  .relatorio-tabela { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .relatorio-tabela th { text-align: left; color: var(--text-muted); font-weight: 500; padding: 6px 4px; border-bottom: 1px solid var(--line-strong); }
+  .relatorio-tabela td { padding: 7px 4px; border-top: 1px solid var(--line); color: var(--text); }
+  .relatorio-tabela td.num { text-align: right; font-variant-numeric: tabular-nums; color: var(--white-strong); font-weight: 600; }
+
+  /* Donut de status (aba Presenca > % total do periodo). Paleta pequena e
+     fixa (nao categorica generica) porque as 4 fatias sao ESTADOS, nao
+     identidades soltas - mesma logica de verde/amarelo/vermelho que a
+     planilha ja usa no semaforo da aba Regional (corSemaforo no Code.gs),
+     so recalibrada pra ficar legivel no fundo escuro do app. */
+  :root {
+    --status-confirmado: #5FC98D;
+    --status-aguardando: #9C9890;
+    --status-justificada: #E0B24D;
+    --status-infracional: #D9635A;
+  }
+  .donut-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  .donut-legend { display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; flex: 1 1 160px; min-width: 150px; }
+  .donut-legend-item { display: flex; align-items: center; gap: 8px; }
+  .donut-swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+  .donut-legend-label { color: var(--text); }
+  .donut-legend-value { color: var(--text-muted); margin-left: auto; font-variant-numeric: tabular-nums; padding-left: 8px; }
+  .donut-card { margin-bottom: 14px; }
+  .donut-card-total { text-align: center; }
+  .donut-card-total .donut-wrap { justify-content: center; }
+  .donut-card-total .donut-legend { flex: 0 1 220px; text-align: left; }
+  .donut-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
   .presenca-pct {
     font-size: 15px;
     font-weight: 700;
@@ -508,21 +550,37 @@ function divisoesSemRegional() {
   return escoposEmOrdemDeExibicao().filter(e => e.chave !== 'regional');
 }
 
+// So Regional e Barra na tela de Relatorios (decisao do clube) - Modo
+// organizador e a tela inicial continuam com as 7 divisoes normalmente
+// (escoposEmOrdemDeExibicao). Nada e apagado no backend/planilha, e so
+// filtro de exibicao aqui.
+function escoposAtivos() {
+  return escoposEmOrdemDeExibicao().filter(e => e.chave === 'regional' || e.chave === 'barra');
+}
+
 const STATUS = {
   aguardando: { emoji: '⚠️', label: 'Aguardando' },
   confirmado: { emoji: '✅', label: 'Confirmado' },
   familia: { emoji: '❌', label: 'Família' },
-  trabalho: { emoji: '❌', label: 'Trabalho' }
+  trabalho: { emoji: '❌', label: 'Trabalho' },
+  // So aparecem em eventos criados pela tela "Relatorios" (colar convocacao) -
+  // o picker manual continua limitado a STATUS_PICKER_KEYS, os 4 de cima.
+  // "infracional" cobre tanto falta sem justificativa quanto quem nao
+  // respondeu a convocacao (mesmo tratamento, decisao do clube).
+  justificada: { emoji: '❌', label: 'Justificada' },
+  infracional: { emoji: '⭕', label: 'Infracional' }
 };
+const STATUS_PICKER_KEYS = ['aguardando', 'confirmado', 'familia', 'trabalho'];
 const GRAUS = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
 
 // Tipos de evento do clube. Escolha unica por evento. Para acrescentar um
 // tipo novo, e so um item a mais em cada uma destas duas listas.
-const TIPOS_EVENTO = ['Bate e Volta', 'Pub', 'Ação Social'];
+const TIPOS_EVENTO = ['Bate e Volta', 'Pub', 'Ação Social', 'Reunião'];
 const EMOJI_TIPO_EVENTO = {
   'Pub': '🍻',
   'Bate e Volta': '🏍️',
-  'Ação Social': '🏥'
+  'Ação Social': '🏥',
+  'Reunião': '📊'
 };
 function emojiTipoEvento(tipo) { return EMOJI_TIPO_EVENTO[tipo] || ''; }
 
@@ -540,6 +598,9 @@ function funcaoPorChave(chave) { return FUNCOES.find(f => f.chave === chave); }
 
 let state = {
   view: 'home',
+  // Se ja entrou no card "Eventos" da tela inicial - false = mostra so o
+  // card (tela raiz), sem listar as 7 divisoes de cara.
+  homeEventosAberto: false,
   // Chave de ESCOPOS ('barra', 'regional', ...) - qual escopo o membro esta
   // vendo na tela inicial. null = ainda na tela de escolha.
   homeEscopo: null,
@@ -611,6 +672,49 @@ let state = {
   insightResultado: null,
   insightConfirmDeleteRodadaId: null,
   insightMostrarExcluidos: false,
+
+  // Tela "Relatorios" (colar convocacao). Fica em campos separados dos
+  // equivalentes do Modo organizador (adminEscopo, isAdmin) para nao mexer
+  // no estado de uma sessao de organizador que porventura esteja aberta.
+  relatorioEscopo: null,
+  // Qual divisao vai levar o relatorio colado (a categoria do evento
+  // criado). So diferente de relatorioEscopo quando o acesso foi pelo PIN
+  // Regional - ai a pessoa escolhe entre "Regional" (convocacao com varias
+  // divisoes juntas) ou uma divisao especifica (convocacao so daquela
+  // divisao, mesmo entrando pelo PIN Regional). Fora do Regional, e sempre
+  // igual a relatorioEscopo (nao ha escolha).
+  relatorioCategoriaAlvo: null,
+  // Tipo escolhido na tela de colar (um de TIPOS_EVENTO) - quando marcado,
+  // vence o palpite que o parser tenta tirar do titulo do texto colado.
+  relatorioTipoEscolhido: null,
+  relatorioIsAdmin: false,
+  relatorioPinErro: null,
+  relatorioPinVerificando: false,
+  // Qual aba do painel de Relatorios esta ativa: 'colar' | 'eventos' | 'presenca'.
+  relatorioTab: 'resumo',
+  // Dentro da aba "Colar", em qual passo do fluxo colar->revisar->resultado
+  // a pessoa esta.
+  relatorioColarStep: 'texto',
+  relatorioTextoBruto: '',
+  // Guarda o resultado do parser: { evento: {...}, membrosParsed: [...], avisos: [...] }.
+  // Cada item de membrosParsed carrega seu proprio membroId/ignorado/sugestoes,
+  // editados direto pela tela de revisao (sem precisar de um mapa separado).
+  relatorioParsed: null,
+  relatorioSalvando: false,
+  relatorioSalvarErro: null,
+  relatorioSalvoEventoId: null,
+  // Aba "Presenca": % de cada integrante (mesmo motor de lerEstatisticasMembros
+  // que ja alimenta o Modo organizador, so que aqui roda para relatorioEscopo).
+  relatorioEstatisticas: null,
+  relatorioEstatisticasLoading: false,
+  relatorioEstatisticasError: null,
+  // Janela (em meses) de cada donut do painel de Presenca - uma chave por
+  // grafico ('total' + um por TIPOS_EVENTO), cada um navega o proprio
+  // periodo independente dos outros.
+  relatorioPeriodoPorGrafico: { total: 3, 'Pub': 3, 'Bate e Volta': 3, 'Ação Social': 3, 'Reunião': 3 },
+  // null = mostra o painel de donuts; um tipo (ou 'total') escolhido =
+  // mostra o grafico de barras + tabela so dos eventos daquele grupo.
+  relatorioTipoDetalhe: null,
 };
 
 function genId() {
@@ -675,6 +779,26 @@ function apiBeacon(action, params) {
   if (!navigator.sendBeacon) return false;
   const corpo = JSON.stringify(Object.assign({ action: action }, params));
   return navigator.sendBeacon(API_URL, new Blob([corpo], { type: 'text/plain;charset=utf-8' }));
+}
+
+// Usado so pela importacao de convocacao colada: o payload (lista de membros
+// com status) pode passar do limite pratico de tamanho de uma URL de GET, ja
+// que o api() normal manda tudo como query string. O doGet/doPost no Code.gs
+// caem na mesma funcao executar(), entao o backend nao muda - so troca o
+// transporte para um corpo JSON de verdade.
+async function apiPost(action, params) {
+  // Sem header de Content-Type de proposito: o fetch entao manda como
+  // "text/plain" (o mesmo que o sendBeacon acima ja usa), que o navegador
+  // trata como requisicao simples e nao dispara preflight OPTIONS - o Apps
+  // Script nao responde a OPTIONS, entao um POST com Content-Type
+  // "application/json" explicito falharia por CORS.
+  const r = await fetch(API_URL, {
+    method: 'POST',
+    body: JSON.stringify(Object.assign({ action: action }, params))
+  });
+  const data = await r.json();
+  if (!data || !data.ok) throw new Error((data && data.erro) || 'A planilha recusou a operação');
+  return data;
 }
 
 // Usado nas telas do organizador, onde quem grava e uma pessoa so e um aviso
@@ -957,21 +1081,23 @@ function render() {
   if (state.view === 'admin-divisoes') return renderDivisoes(app);
   if (state.view === 'admin-pin') return renderPin(app);
   if (state.view === 'admin') return renderAdmin(app);
+  if (state.view === 'relatorio-divisoes') return renderRelatorioDivisoes(app);
+  if (state.view === 'relatorio-pin') return renderRelatorioPin(app);
+  if (state.view === 'relatorio') return renderRelatorioShell(app);
 }
 
 function renderHome(app) {
+  if (!state.homeEventosAberto) return renderHomeInicio(app);
   if (!state.homeEscopo) return renderHomeEscolha(app);
   if (!state.homeTipo) return renderHomeTipos(app);
   return renderHomeEventos(app);
 }
 
-// Primeiro passo: escolher Barra ou Regional, antes de ver qualquer evento.
-// So essas duas por enquanto - a tela publica dos membros ainda nao segue
-// as outras divisoes novas, que so existem dentro do Modo organizador.
-// Cada card mostra quantos eventos ativos tem naquele escopo.
-function renderHomeEscolha(app) {
-  const contarAtivos = (chave) =>
-    state.events.filter(ev => ev.categoria === chave && ev.status !== 'encerrado').length;
+// Tela raiz do app: so o essencial (rank + um unico botao "Eventos"), pra
+// nao poluir a primeira tela com as 7 divisoes de cara. Quem quiser ver
+// eventos entra no card "Eventos", que abre a lista de divisoes de sempre
+// (renderHomeEscolha).
+function renderHomeInicio(app) {
   app.innerHTML = `
     <div class="crest-wrap">
       <img src="data:image/png;base64,${LOGO_B64}" alt="Insanos MC Brasil">
@@ -983,6 +1109,33 @@ function renderHomeEscolha(app) {
       <div class="btn ghost on-photo" data-action="go-rank-insights">💡 Rank de Insights</div>
     </div>
     <div class="ring-divider"></div>
+    <div class="card event-card" data-action="abrir-home-eventos">
+      <div>
+        <div class="name">📅 Eventos</div>
+        <div class="meta">Ver eventos por divisão</div>
+      </div>
+      <div class="arrow">›</div>
+    </div>
+    <div class="footer-admin">
+      <span class="btn ghost on-photo" data-action="go-divisoes">Modo organizador</span>
+      <span class="btn ghost on-photo" data-action="go-relatorio-divisoes">📋 Relatórios</span>
+      <div class="brand-tag">Desenvolvido por: Almeida - Adm. Barra - RJ4</div>
+    </div>
+  `;
+}
+
+// Primeiro passo dentro de "Eventos": escolher a divisao, antes de ver
+// qualquer evento. Cada card mostra quantos eventos ativos tem naquele
+// escopo.
+function renderHomeEscolha(app) {
+  const contarAtivos = (chave) =>
+    state.events.filter(ev => ev.categoria === chave && ev.status !== 'encerrado').length;
+  app.innerHTML = `
+    <div class="back-link on-photo" data-action="fechar-home-eventos">‹ Voltar</div>
+    <div class="crest-wrap" style="margin-bottom: 8px;">
+      <h1 style="font-size: 19px;">Eventos</h1>
+      <div class="sub">Escolha a divisão</div>
+    </div>
     ${escoposEmOrdemDeExibicao().map(e => {
       const n = contarAtivos(e.chave);
       return `
@@ -995,10 +1148,6 @@ function renderHomeEscolha(app) {
         </div>
       `;
     }).join('')}
-    <div class="footer-admin">
-      <span class="btn ghost on-photo" data-action="go-divisoes">Modo organizador</span>
-      <div class="brand-tag">Desenvolvido por: Almeida - Adm. Barra - RJ4</div>
-    </div>
   `;
 }
 
@@ -1317,6 +1466,210 @@ function ordenarPorHierarquia(membros) {
   return [...membros].sort((a, b) => indice(a) - indice(b) || a.nome.localeCompare(b.nome));
 }
 
+// ========================================================================
+// PARSER DA CONVOCACAO COLADA (tela "Relatorios")
+// Le o texto que o clube ja manda pronto no WhatsApp e transforma em
+// { evento, membrosParsed, avisos } - funcao pura, sem tocar em state/DOM,
+// pra dar pra testar/ajustar so olhando entrada e saida.
+// ========================================================================
+
+const EMOJI_RE = /[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}️]/gu;
+function stripEmoji(s) { return s.replace(EMOJI_RE, ''); }
+
+function normalizarNome(s) {
+  return String(s || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Distancia de edicao simples (Levenshtein) - nomes de membro sao curtos, o
+// custo O(n*m) nao pesa.
+function distanciaLevenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  const linha = new Array(n + 1);
+  for (let j = 0; j <= n; j++) linha[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let anterior = linha[0];
+    linha[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const temp = linha[j];
+      linha[j] = a[i - 1] === b[j - 1]
+        ? anterior
+        : 1 + Math.min(anterior, linha[j], linha[j - 1]);
+      anterior = temp;
+    }
+  }
+  return linha[n];
+}
+
+// Sugestoes de "quer dizer" para um nome que nao bateu exato - so serve para
+// erro de digitacao/apelido parecido; apelido sem nada em comum com o nome
+// cadastrado (ex.: alcunha pura) nao e pego, e precisa de escolha manual.
+function sugerirCorrespondencias(nomeParsedNorm, candidatos) {
+  return candidatos
+    .map(m => ({ membro: m, dist: distanciaLevenshtein(nomeParsedNorm, normalizarNome(m.nome)) }))
+    .filter(c => c.dist <= Math.max(2, Math.ceil(nomeParsedNorm.length * 0.4)))
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, 3)
+    .map(c => c.membro);
+}
+
+// Palavra reconhecida manda sobre o emoji quando os dois aparecem e nao
+// batem (ex.: "✅ aguardando" na lista real - erro de digitacao humano, a
+// palavra e que vale). Quem nao tem emoji nem palavra nenhuma cai em
+// "infracional" junto com quem tem ⭕ explicito - decisao do clube: nao
+// responder a convocacao e tratado igual a falta sem justificativa.
+function statusDoResto(resto) {
+  const semEmoji = stripEmoji(resto).trim();
+  const palavra = normalizarNome(semEmoji);
+  if (palavra.includes('confirmad')) return 'confirmado';
+  if (palavra.includes('aguardand')) return 'aguardando';
+  if (palavra.includes('trabalho')) return 'trabalho';
+  if (palavra.includes('famil')) return 'familia';
+  if (palavra.includes('infracional')) return 'infracional';
+  if (palavra.includes('justificad')) return 'justificada';
+
+  const temCheck = resto.includes('✅');
+  const temX = resto.includes('❌');
+  const temCirculo = resto.includes('⭕');
+  const temAlerta = resto.includes('⚠️');
+
+  if (!palavra && !temCheck && !temX && !temCirculo && !temAlerta) return 'infracional'; // nao respondeu
+  if (temCheck) return 'confirmado';
+  if (temCirculo) return 'infracional';
+  if (temX) return 'justificada';
+  if (temAlerta) return 'aguardando';
+  return 'aguardando';
+}
+
+function parseConvocacaoTexto(texto) {
+  const linhas = String(texto || '').split('\n').map(l => l.trim());
+  const avisos = [];
+  const evento = { nome: '', tipo: '', data: '', horario: '', endereco: '', outros: '' };
+
+  // --- Titulo do evento: a ultima linha nao-vazia antes de uma linha "Evento" ---
+  const idxEvento = linhas.findIndex(l => l.toLowerCase() === 'evento');
+  if (idxEvento > 0) {
+    for (let i = idxEvento - 1; i >= 0; i--) {
+      if (linhas[i]) { evento.nome = stripEmoji(linhas[i]).trim(); break; }
+    }
+  }
+  if (evento.nome) {
+    const nomeNorm = normalizarNome(evento.nome);
+    const tipoAchado = TIPOS_EVENTO.find(t => nomeNorm.includes(normalizarNome(t)));
+    if (tipoAchado) evento.tipo = tipoAchado;
+  }
+
+  // --- Data: token tipo "09SET26" em qualquer linha ---
+  const matchData = texto.match(/(\d{1,2})\s*([A-ZÇ]{3})\s*(\d{2})\b/i);
+  if (matchData) {
+    const dia = matchData[1].padStart(2, '0');
+    const mesIdx = MESES_ABREV.indexOf(matchData[2].toUpperCase());
+    if (mesIdx !== -1) {
+      const ano = 2000 + Number(matchData[3]);
+      evento.data = `${ano}-${String(mesIdx + 1).padStart(2, '0')}-${dia}`;
+    } else {
+      avisos.push('Não reconheci o mês na data — confira o campo Data.');
+    }
+  }
+
+  // --- Endereco: entre a linha com "DESTINO" e a proxima secao ---
+  const idxDestino = linhas.findIndex(l => /destino/i.test(l));
+  if (idxDestino !== -1) {
+    const enderecoLinhas = [];
+    for (let i = idxDestino + 1; i < linhas.length; i++) {
+      const l = linhas[i];
+      if (!l) continue;
+      if (/^\.{4,}$/.test(l) || /horários/i.test(l) || /⏰/.test(l)) break;
+      if (/^https?:\/\//i.test(l)) { evento.outros = evento.outros ? evento.outros + '\n' + l : l; continue; }
+      enderecoLinhas.push(l);
+    }
+    evento.endereco = enderecoLinhas.join(', ');
+  }
+
+  // --- Horarios: Destacamento / Briefing / Inicio ---
+  const normalizaHora = (h) => {
+    const m = h.match(/(\d{1,2})h(\d{0,2})/i);
+    if (!m) return h;
+    return `${m[1].padStart(2, '0')}:${(m[2] || '00').padStart(2, '0')}`;
+  };
+  const extrasHorario = [];
+  linhas.forEach(l => {
+    const mIni = l.match(/in[íi]cio[:\s]*([0-9]{1,2}h[0-9]{0,2})/i);
+    if (mIni) { evento.horario = normalizaHora(mIni[1]); return; }
+    const mDest = l.match(/destacamento[:\s]*([0-9]{1,2}h[0-9]{0,2})/i);
+    if (mDest) { extrasHorario.push('Destacamento: ' + normalizaHora(mDest[1])); return; }
+    const mBrief = l.match(/briefing[:\s]*([0-9]{1,2}h[0-9]{0,2})/i);
+    if (mBrief) { extrasHorario.push('Briefing: ' + normalizaHora(mBrief[1])); return; }
+  });
+  if (extrasHorario.length) {
+    evento.outros = evento.outros ? evento.outros + '\n' + extrasHorario.join(' · ') : extrasHorario.join(' · ');
+  }
+
+  // --- Lista de membros ---
+  const idxMembros = linhas.findIndex(l => /membros/i.test(l));
+  const membrosParsed = [];
+  if (idxMembros !== -1) {
+    let divisaoAtual = '';
+    // Nome tolera qualquer caixa (maiuscula/minuscula/acentuada) - a
+    // convocacao real vem toda em CAIXA ALTA, mas um nome digitado errado
+    // (ou colado de outro lugar) nao pode sumir da lista silenciosamente.
+    const memberRe = /^(\d{1,3})\.\s*([A-Za-zÀ-ÖØ-öø-ÿ0-9][A-Za-zÀ-ÖØ-öø-ÿ0-9 .'\-]*?)\s*\(([IVXivx]+)\)\s*(.*)$/;
+    for (let i = idxMembros + 1; i < linhas.length; i++) {
+      const l = linhas[i];
+      if (/^participa[çc][ãa]o/i.test(l)) break; // legenda - fim da lista
+      if (/^divis[ãa]o\s+/i.test(l)) { divisaoAtual = l.replace(/^divis[ãa]o\s+/i, 'Divisão ').trim(); continue; }
+      const m = l.match(memberRe);
+      if (!m) continue;
+      const [, numero, nomeTexto, grauTexto, resto] = m;
+      const grau = grauTexto.toUpperCase();
+      if (GRAUS.indexOf(grau) === -1) avisos.push(`Grau "${grauTexto}" (linha ${numero}) não reconhecido.`);
+      membrosParsed.push({
+        numero,
+        nomeTexto: nomeTexto.trim(),
+        grauTexto: grau,
+        divisaoTexto: divisaoAtual,
+        status: statusDoResto(resto),
+        direto: resto.includes('🚀'),
+        destacado: resto.includes('🚧'),
+        acompanhado: resto.includes('🐯'),
+        membroId: null,
+        ignorado: false,
+        sugestoes: []
+      });
+    }
+  } else {
+    avisos.push('Não encontrei a seção "MEMBROS" no texto colado.');
+  }
+
+  return { evento, membrosParsed, avisos };
+}
+
+// Casa cada membro lido do texto com o cadastro (state.roster), por nome
+// normalizado; quem nao bate exato recebe sugestoes por semelhanca. Nao
+// muda nada em state.roster - so preenche membroId/sugestoes de cada linha.
+function resolverParsedComRoster(membrosParsed, escopoChave) {
+  const candidatosBase = escopoChave === 'regional'
+    ? state.roster
+    : state.roster.filter(m => m.divisao === escopoPorChave(escopoChave).nome);
+
+  return membrosParsed.map(row => {
+    const candidatos = escopoChave === 'regional' && row.divisaoTexto
+      ? state.roster.filter(m => normalizarNome(m.divisao).includes(normalizarNome(row.divisaoTexto).replace('divisao ', '')))
+      : candidatosBase;
+    const pool = candidatos.length ? candidatos : candidatosBase;
+    const alvoNorm = normalizarNome(row.nomeTexto);
+    const exato = pool.find(m => normalizarNome(m.nome) === alvoNorm);
+    if (exato) return { ...row, membroId: exato.id };
+    return { ...row, membroId: null, sugestoes: sugerirCorrespondencias(alvoNorm, pool) };
+  });
+}
+
 // So usado em eventos regionais: agrupa os participantes pela divisao de
 // cada um (ordem alfabetica do nome da divisao), com a hierarquia aplicada
 // dentro de cada grupo. Funciona desde ja porque cada membro ja carrega a
@@ -1351,7 +1704,7 @@ function contagemGrupo(membros) {
   membros.forEach(m => {
     const st = getMemberStatus(m.id).status;
     if (st === 'confirmado') c.confirmado++;
-    else if (st === 'familia' || st === 'trabalho') c.faltam++;
+    else if (st === 'familia' || st === 'trabalho' || st === 'infracional' || st === 'justificada') c.faltam++;
     else c.aguardando++;
   });
   return c;
@@ -1533,7 +1886,7 @@ function renderMemberRow(m, i) {
       </div>
       <div class="picker ${isOpen ? 'open' : ''}">
         <div class="picker-group">
-          ${Object.entries(STATUS).map(([key, val]) => `
+          ${STATUS_PICKER_KEYS.map(key => [key, STATUS[key]]).map(([key, val]) => `
             <button class="picker-btn ${st.status === key ? 'active' : ''}" data-action="set-status" data-id="${m.id}" data-status="${key}">
               ${val.emoji} ${val.label}
             </button>
@@ -1614,6 +1967,756 @@ async function checkPin() {
   }
   state.pinVerificando = false;
   render();
+}
+
+// Tela "Relatorios" (colar convocacao) - copia de renderDivisoes/renderPin,
+// mas escreve em relatorioEscopo/relatorioIsAdmin em vez de
+// adminEscopo/isAdmin, para nao interferir numa sessao do Modo organizador
+// que porventura esteja aberta ao mesmo tempo.
+function renderRelatorioDivisoes(app) {
+  app.innerHTML = `
+    <div class="back-link on-photo" data-action="go-home">‹ Voltar</div>
+    <div class="crest-wrap" style="margin-bottom: 8px;">
+      <h1 style="font-size: 19px;">Relatórios</h1>
+      <div class="sub">Escolha a divisão</div>
+    </div>
+    ${escoposAtivos().map(e => `
+      <div class="card event-card" data-action="select-relatorio-divisao" data-value="${e.chave}">
+        <div>
+          <div class="name">${escapeHtml(e.nome)}</div>
+        </div>
+        <div class="arrow">›</div>
+      </div>
+    `).join('')}
+  `;
+}
+
+function renderRelatorioPin(app) {
+  app.innerHTML = `
+    <div class="back-link on-photo" data-action="go-relatorio-divisoes">‹ Voltar</div>
+    <div class="crest-wrap" style="margin-bottom: 8px;">
+      <h1 style="font-size: 19px;">Relatórios</h1>
+    </div>
+    <div class="card">
+      <label>PIN de acesso</label>
+      <input type="tel" inputmode="numeric" maxlength="4" class="pin-input" id="relatorio-pin-field" placeholder="••••" autofocus ${state.relatorioPinVerificando ? 'disabled' : ''}>
+      ${state.relatorioPinErro ? `<div style="color: #C9A29C; font-size: 13px; margin-bottom: 10px;">${escapeHtml(state.relatorioPinErro)}</div>` : ''}
+      <button class="btn block" data-action="check-relatorio-pin" ${state.relatorioPinVerificando ? 'disabled' : ''}>${state.relatorioPinVerificando ? 'Verificando…' : 'Entrar'}</button>
+    </div>
+  `;
+  const field = document.getElementById('relatorio-pin-field');
+  if (field) {
+    field.focus();
+    field.addEventListener('keydown', (e) => { if (e.key === 'Enter') checkRelatorioPin(); });
+  }
+}
+
+async function checkRelatorioPin() {
+  if (state.relatorioPinVerificando) return;
+  const val = document.getElementById('relatorio-pin-field').value.trim();
+  if (!val) return;
+  state.relatorioPinVerificando = true;
+  state.relatorioPinErro = null;
+  render();
+  try {
+    const r = await api('verificarPin', { escopo: state.relatorioEscopo, pin: val });
+    if (r.valido) {
+      state.relatorioIsAdmin = true;
+      state.view = 'relatorio';
+      // A pagina principal depois do PIN e o "Resumo Relatorio" (os 5
+      // donuts) - as outras 6 abas ficam a um clique de distancia.
+      state.relatorioTab = 'resumo';
+      state.relatorioColarStep = 'texto';
+      state.relatorioTipoDetalhe = null;
+      render();
+      await Promise.all([loadReportData(), loadRelatorioEstatisticas()]);
+    } else {
+      state.relatorioPinErro = 'PIN incorreto.';
+    }
+  } catch (e) {
+    state.relatorioPinErro = 'Não consegui verificar (' + e.message + '). Tente de novo.';
+  }
+  state.relatorioPinVerificando = false;
+  render();
+}
+
+// Painel unico da tela "Relatorios": cabecalho + 7 abas + o conteudo da aba
+// ativa. E o analogo do renderAdmin() do Modo organizador, so que focado no
+// fluxo de colar convocacao. As 4 ultimas abas (uma por TIPOS_EVENTO, nessa
+// ordem especifica pedida) sao paginas fixas so de tabela - sem chips de
+// periodo, sem grafico - filtradas aquele tipo.
+const TIPOS_EVENTO_TABS_ORDEM = ['Pub', 'Bate e Volta', 'Reunião', 'Ação Social'];
+const RELATORIO_TABS = [
+  { chave: 'resumo', label: 'Resumo Relatório' },
+  { chave: 'enviar', label: 'Enviar Relatório' },
+  { chave: 'eventos', label: 'Eventos' },
+  ...TIPOS_EVENTO_TABS_ORDEM.map(t => ({ chave: t, label: 'Relatório ' + t })),
+];
+
+function renderRelatorioShell(app) {
+  const conteudo = state.relatorioTab === 'eventos' ? conteudoRelatorioEventos()
+    : state.relatorioTab === 'resumo' ? conteudoRelatorioPresenca()
+    : state.relatorioTab === 'enviar' ? conteudoRelatorioColar()
+    : TIPOS_EVENTO_TABS_ORDEM.includes(state.relatorioTab) ? conteudoRelatorioTipoFixo(state.relatorioTab)
+    : conteudoRelatorioColar();
+
+  app.innerHTML = `
+    <div class="back-link on-photo" data-action="go-relatorio-divisoes">‹ Trocar divisão</div>
+    <div class="crest-wrap" style="margin-bottom: 8px;">
+      <h1 style="font-size: 19px;">Relatórios</h1>
+      <div class="sub">${escapeHtml(escopoPorChave(state.relatorioEscopo).nome)}</div>
+    </div>
+    <div class="tabs tabs-wrap">
+      ${RELATORIO_TABS.map(t => `<div class="tab ${state.relatorioTab === t.chave ? 'active' : ''}" data-action="relatorio-tab" data-tab="${t.chave}">${t.label}</div>`).join('')}
+    </div>
+    ${conteudo}
+  `;
+}
+
+function conteudoRelatorioColar() {
+  if (state.relatorioColarStep === 'revisao') return conteudoRelatorioRevisao();
+  if (state.relatorioColarStep === 'resultado') return conteudoRelatorioResultado();
+  // So faz sentido escolher a divisao do relatorio quando o acesso foi pelo
+  // PIN Regional - ele e chave-mestra, entao da pra colar tanto a
+  // convocacao regional inteira (varias divisoes juntas) quanto a
+  // convocacao de uma divisao especifica sem precisar do PIN dela. Fora do
+  // Regional so existe uma opcao (a propria divisao), entao nao mostra nada.
+  const seletorDivisao = state.relatorioEscopo === 'regional' ? `
+    <div class="card" style="margin-bottom:14px;">
+      <div style="font-weight:600; margin-bottom:8px;">Essa convocação é de qual divisão?</div>
+      <div class="chip-grid wide">
+        ${escoposEmOrdemDeExibicao().map(e => `
+          <button class="chip-option ${state.relatorioCategoriaAlvo === e.chave ? 'active' : ''}" data-action="set-relatorio-categoria" data-value="${e.chave}">${escapeHtml(e.nome)}</button>
+        `).join('')}
+      </div>
+    </div>
+  ` : '';
+  return `
+    ${seletorDivisao}
+    <div class="card" style="margin-bottom:14px;">
+      <div style="font-weight:600; margin-bottom:8px;">Tipo de evento</div>
+      <div class="chip-grid wide">
+        ${TIPOS_EVENTO.map(t => `
+          <button class="chip-option ${state.relatorioTipoEscolhido === t ? 'active' : ''}" data-action="set-relatorio-tipo" data-value="${escapeHtml(t)}">${emojiTipoEvento(t)} ${escapeHtml(t.toUpperCase())}</button>
+        `).join('')}
+      </div>
+    </div>
+    <div class="card">
+      <div class="field">
+        <label>Cole aqui a convocação inteira (a mesma que vai pro WhatsApp)</label>
+        <textarea id="relatorio-texto-field" rows="14" placeholder="Cole o texto da convocação, com a lista de membros e os status de cada um…">${escapeHtml(state.relatorioTextoBruto)}</textarea>
+      </div>
+      <button class="btn block" data-action="analisar-convocacao">Analisar</button>
+    </div>
+  `;
+}
+
+function analisarConvocacao() {
+  // Le direto do campo (nao so de state.relatorioTextoBruto) - o campo nao
+  // dispara um re-render a cada letra digitada, entao o valor no state pode
+  // ficar defasado se o navegador preencher o campo sem passar pelo evento
+  // "input" (autofill, colar via menu de contexto em alguns navegadores).
+  const campo = document.getElementById('relatorio-texto-field');
+  if (campo) state.relatorioTextoBruto = campo.value;
+  if (!state.relatorioTextoBruto.trim()) return;
+
+  const parsed = parseConvocacaoTexto(state.relatorioTextoBruto);
+  // O tipo escolhido nos botoes acima da caixa de texto vence o palpite do
+  // parser (que so tenta adivinhar pelo titulo do texto colado) - mais
+  // confiavel que depender do texto ter uma palavra reconhecivel.
+  if (state.relatorioTipoEscolhido) parsed.evento.tipo = state.relatorioTipoEscolhido;
+  // Casa os nomes contra a divisao escolhida (relatorioCategoriaAlvo), nao
+  // contra o escopo de acesso (relatorioEscopo) - um organizador Regional
+  // colando so a convocacao da Curicica precisa que os nomes batam com o
+  // elenco da Curicica, nao com a planilha toda.
+  parsed.membrosParsed = resolverParsedComRoster(parsed.membrosParsed, state.relatorioCategoriaAlvo || state.relatorioEscopo);
+  state.relatorioParsed = parsed;
+  state.relatorioColarStep = 'revisao';
+  render();
+}
+
+const STATUS_TOTAIS_LABEL = {
+  confirmado: 'confirmados', aguardando: 'aguardando', trabalho: 'faltas (trabalho)',
+  familia: 'faltas (família)', justificada: 'faltas justificadas', infracional: 'faltas infracionais'
+};
+
+function conteudoRelatorioRevisao() {
+  const parsed = state.relatorioParsed;
+  if (!parsed) { state.relatorioColarStep = 'texto'; return conteudoRelatorioColar(); }
+  const ev = parsed.evento;
+  const membros = parsed.membrosParsed;
+  const naoResolvidos = membros.filter(r => !r.membroId && !r.ignorado);
+  const totais = {};
+  membros.forEach(r => { if (!r.ignorado) totais[r.status] = (totais[r.status] || 0) + 1; });
+  const podeConfirmar = naoResolvidos.length === 0 && membros.some(r => r.membroId);
+
+  const categoriaAlvo = state.relatorioCategoriaAlvo || state.relatorioEscopo;
+  const escopoNome = escopoPorChave(categoriaAlvo).nome;
+  const candidatosDropdown = categoriaAlvo === 'regional'
+    ? state.roster
+    : state.roster.filter(m => m.divisao === escopoNome);
+
+  return `
+    <div class="btn ghost" style="margin-bottom:10px;" data-action="go-relatorio-texto">‹ Colar de novo</div>
+    <div style="font-weight:600; font-size:15px; margin-bottom:2px;">Revisar antes de salvar</div>
+    <div style="color:var(--text-muted); font-size:12.5px; margin-bottom:10px;">Divisão: ${escapeHtml(escopoNome)}</div>
+
+    ${parsed.avisos.length ? `
+      <div class="alert info" style="margin-bottom:14px;">
+        ${parsed.avisos.map(a => `<div class="alert-msg">⚠️ ${escapeHtml(a)}</div>`).join('')}
+      </div>
+    ` : ''}
+
+    <div class="card">
+      <div class="field">
+        <label>Nome do evento</label>
+        <input type="text" id="rev-evento-nome" value="${escapeHtml(ev.nome)}">
+      </div>
+      <div class="row-gap" style="margin-bottom: 0;">
+        <div class="field" style="flex: 1; min-width: 130px;">
+          <label>Data</label>
+          <input type="date" id="rev-evento-data" value="${escapeHtml(ev.data)}">
+        </div>
+        <div class="field" style="flex: 1; min-width: 100px;">
+          <label>Horário</label>
+          <input type="time" id="rev-evento-horario" value="${escapeHtml(ev.horario)}">
+        </div>
+      </div>
+      <div class="field">
+        <label>Endereço</label>
+        <input type="text" id="rev-evento-endereco" value="${escapeHtml(ev.endereco)}">
+      </div>
+      <div class="field">
+        <label>Outros (opcional)</label>
+        <textarea id="rev-evento-outros" rows="2">${escapeHtml(ev.outros)}</textarea>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px; overflow-x:auto;">
+      <div style="font-weight:600; margin-bottom:8px;">Membros lidos da lista (${membros.length})</div>
+      <table style="width:100%; border-collapse:collapse; font-size:13.5px;">
+        <thead>
+          <tr style="text-align:left; color:var(--text-muted);">
+            <th style="padding:6px 4px;">Nome (texto)</th>
+            <th style="padding:6px 4px;">Cadastro</th>
+            <th style="padding:6px 4px;">Status</th>
+            <th style="padding:6px 4px;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${membros.map((r, i) => renderLinhaRevisao(r, i, candidatosDropdown)).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    ${naoResolvidos.length ? `
+      <div class="alert" style="margin-top:14px;">
+        <div class="alert-title">${naoResolvidos.length} nome(s) sem correspondência</div>
+        <div class="alert-msg">Escolha o membro certo (ou "Ignorar") na lista acima antes de confirmar.</div>
+      </div>
+    ` : ''}
+
+    <div class="card" style="margin-top:14px;">
+      <div style="font-weight:600; margin-bottom:6px;">Resumo</div>
+      ${Object.keys(STATUS_TOTAIS_LABEL).map(k => `<div class="info-line">${totais[k] || 0} ${STATUS_TOTAIS_LABEL[k]}</div>`).join('')}
+    </div>
+
+    ${state.relatorioSalvarErro ? `
+      <div class="alert" style="margin-top:14px;">
+        <div class="alert-title">Não consegui salvar</div>
+        <div class="alert-msg">${escapeHtml(state.relatorioSalvarErro)}</div>
+      </div>
+    ` : ''}
+
+    <button class="btn block" style="margin-top:14px;" data-action="confirmar-evento-parseado" ${podeConfirmar && !state.relatorioSalvando ? '' : 'disabled'}>
+      ${state.relatorioSalvando ? 'Salvando…' : 'Confirmar e criar evento'}
+    </button>
+  `;
+}
+
+function renderLinhaRevisao(r, i, candidatos) {
+  const s = STATUS[r.status];
+  return `
+    <tr style="border-top:1px solid var(--border); ${r.ignorado ? 'opacity:.5;' : ''}">
+      <td style="padding:6px 4px;">${escapeHtml(r.nomeTexto)} <span style="color:var(--text-muted);">(${escapeHtml(r.grauTexto)})</span></td>
+      <td style="padding:6px 4px;">
+        ${r.ignorado ? '<span style="color:var(--text-muted);">Ignorado</span>' : `
+          <select data-action="resolver-membro" data-index="${i}" style="max-width:170px;">
+            <option value="">— selecionar —</option>
+            ${candidatos.map(m => `<option value="${m.id}" ${r.membroId === m.id ? 'selected' : ''}>${escapeHtml(m.nome)}${m.grau ? ' (' + escapeHtml(m.grau) + ')' : ''}</option>`).join('')}
+          </select>
+          ${!r.membroId && r.sugestoes.length ? `
+            <div style="margin-top:4px;">
+              ${r.sugestoes.map(m => `<span class="chip-option" style="display:inline-block; margin:2px 4px 0 0;" data-action="aceitar-sugestao" data-index="${i}" data-id="${m.id}">Quis dizer ${escapeHtml(m.nome)}?</span>`).join('')}
+            </div>
+          ` : ''}
+        `}
+      </td>
+      <td style="padding:6px 4px; white-space:nowrap;">${s.emoji} ${s.label}</td>
+      <td style="padding:6px 4px;">
+        <span class="btn ghost" style="padding:2px 8px; font-size:12px;" data-action="${r.ignorado ? 'reincluir-membro-parseado' : 'ignorar-membro-parseado'}" data-index="${i}">
+          ${r.ignorado ? 'Reincluir' : 'Ignorar'}
+        </span>
+      </td>
+    </tr>
+  `;
+}
+
+async function confirmarEventoParseado() {
+  if (state.relatorioSalvando) return;
+  const parsed = state.relatorioParsed;
+  const ev = {
+    nome: document.getElementById('rev-evento-nome').value.trim(),
+    data: document.getElementById('rev-evento-data').value,
+    horario: document.getElementById('rev-evento-horario').value,
+    endereco: document.getElementById('rev-evento-endereco').value.trim(),
+    outros: document.getElementById('rev-evento-outros').value.trim()
+  };
+  if (!ev.nome) { state.relatorioSalvarErro = 'Preencha o nome do evento.'; return render(); }
+
+  const membros = parsed.membrosParsed
+    .filter(r => !r.ignorado && r.membroId)
+    .map(r => ({ id: r.membroId, status: r.status, direto: r.direto, destacado: r.destacado, acompanhado: r.acompanhado }));
+
+  state.relatorioSalvando = true;
+  state.relatorioSalvarErro = null;
+  render();
+  try {
+    const r = await apiPost('criarEventoDeTexto', {
+      nome: ev.nome, data: ev.data, horario: ev.horario, endereco: ev.endereco, outros: ev.outros,
+      // A categoria do evento e a divisao escolhida na tela de colar
+      // (relatorioCategoriaAlvo), nao o escopo de acesso (relatorioEscopo) -
+      // um organizador Regional pode estar colando a convocacao so da
+      // Curicica, e o evento tem que nascer como categoria "curicica".
+      categoria: state.relatorioCategoriaAlvo || state.relatorioEscopo, tipo: parsed.evento.tipo || '',
+      // A lista colada ja e o resultado final (quem foi, quem faltou) - o
+      // evento nasce encerrado, sem precisar que o organizador va la depois
+      // so pra clicar em "Encerrar". Isso tambem faz a % de presenca do
+      // membro contar esse evento na hora (so eventos encerrados entram na
+      // conta, ver lerEstatisticasMembros no Code.gs).
+      status: 'encerrado',
+      membros: membros
+    });
+    state.relatorioSalvoEventoId = r.id;
+    await loadInitial();
+    state.relatorioColarStep = 'resultado';
+  } catch (e) {
+    state.relatorioSalvarErro = e.message;
+  }
+  state.relatorioSalvando = false;
+  render();
+}
+
+function conteudoRelatorioResultado() {
+  const ev = state.events.find(e => e.id === state.relatorioSalvoEventoId);
+  if (!ev) {
+    return `
+      <div class="card"><div class="empty">Não encontrei o evento recém-criado na lista — confira na aba Eventos.</div></div>
+      <button class="btn block" data-action="go-home">Ir para a tela inicial</button>
+    `;
+  }
+  const statusPorMembro = {};
+  (state.relatorioParsed ? state.relatorioParsed.membrosParsed : []).forEach(r => {
+    if (r.membroId) statusPorMembro[r.membroId] = r.status;
+  });
+  const groups = { confirmado: [], familia: [], trabalho: [], aguardando: [], justificada: [], infracional: [] };
+  ev.memberIds.forEach(mid => {
+    const m = state.roster.find(r => r.id === mid);
+    if (!m) return;
+    const st = statusPorMembro[mid] || 'aguardando';
+    (groups[st] || groups.aguardando).push(m.nome);
+  });
+  const total = ev.memberIds.length;
+  const pct = total ? Math.round((groups.confirmado.length / total) * 100) : 0;
+
+  return `
+    <div style="font-weight:600; font-size:15px; margin-bottom:10px;">✅ Evento criado: ${escapeHtml(ev.nome)}</div>
+    <div class="card">
+      <div class="info-line"><b>${pct}% de presença</b> (${groups.confirmado.length} de ${total})</div>
+      <div class="info-line">✅ Confirmados: ${groups.confirmado.length}</div>
+      <div class="info-line">⚠️ Aguardando: ${groups.aguardando.length}</div>
+      <div class="info-line">❌ Faltas justificadas: ${groups.familia.length + groups.trabalho.length + groups.justificada.length}</div>
+      <div class="info-line">⭕ Faltas infracionais (inclui quem não respondeu): ${groups.infracional.length}</div>
+      ${groups.infracional.length ? `<div class="info-line" style="white-space:pre-wrap; color:var(--text-muted);">${groups.infracional.map(n => '- ' + n).join('\n')}</div>` : ''}
+    </div>
+    <div class="row-gap" style="margin-top:14px;">
+      <button class="btn" data-action="open-event" data-id="${ev.id}">Ver evento</button>
+      <button class="btn secondary" data-action="nova-convocacao">Colar outra convocação</button>
+    </div>
+  `;
+}
+
+// Todos os eventos da divisao/Regional escolhida na tela de Relatorios -
+// tanto os criados colando convocacao quanto os que ja existiam antes
+// (criados pelo Modo organizador), ja que sao o mesmo tipo de registro.
+function eventosDoRelatorioEscopo() {
+  return state.events
+    .filter(e => e.categoria === state.relatorioEscopo)
+    .sort((a, b) => (b.data || '').localeCompare(a.data || '') || (b.criadoEm || '').localeCompare(a.criadoEm || ''));
+}
+
+function conteudoRelatorioEventos() {
+  const eventos = eventosDoRelatorioEscopo();
+  if (!eventos.length) return '<div class="empty">Nenhum evento ainda nessa divisão.</div>';
+  return `
+    ${state.reportError ? `
+      <div class="alert" style="margin-bottom:14px;">
+        <div class="alert-title">Não consegui carregar a % de alguns eventos</div>
+        <div class="alert-msg">${escapeHtml(state.reportError)}.</div>
+        <button class="btn secondary block" data-action="retry-relatorio-eventos" style="margin-top:10px;">Tentar de novo</button>
+      </div>
+    ` : ''}
+    <div class="card" style="padding: 4px 16px;">
+      ${eventos.map(ev => {
+        const pct = ev.status === 'encerrado' && state.reportData[ev.id]
+          ? (() => { const c = computeCounts(ev); const total = ev.memberIds.length;
+                      return total ? Math.round((c.confirmado / total) * 100) : 0; })()
+          : null;
+        return `
+          <div class="card event-card" data-action="open-event" data-id="${ev.id}">
+            <div>
+              <div class="name">${escapeHtml(ev.nome)}</div>
+              <div class="meta">${ev.data ? formatDataBR(ev.data) + ' · ' : ''}${ev.status === 'encerrado' ? 'Encerrado' : 'Ativo'}${pct !== null ? ' · ' + pct + '% presença' : ''}</div>
+            </div>
+            <div class="arrow">›</div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+// Aba "Presenca": % por evento, % total do periodo e % de cada integrante -
+// os dois primeiros calculados no navegador a partir do mesmo cache
+// (state.reportData) que a aba Eventos usa; o ultimo reaproveita
+// lerEstatisticasMembros no Code.gs, o mesmo motor que ja alimenta a aba
+// Presencas do Modo organizador.
+async function loadRelatorioEstatisticas() {
+  state.relatorioEstatisticasLoading = true;
+  state.relatorioEstatisticasError = null;
+  render();
+  try {
+    const r = await api('estatisticas', { categoria: state.relatorioEscopo });
+    state.relatorioEstatisticas = r.membros || [];
+  } catch (e) {
+    state.relatorioEstatisticasError = e.message;
+  }
+  state.relatorioEstatisticasLoading = false;
+  render();
+}
+
+// yyyy-MM-dd de N meses atras, no fuso local - mesma ideia de dataCorte no
+// Code.gs, so que calculada no navegador (aqui nao precisamos ler a
+// planilha de novo, so filtrar o que ja esta em state.events/reportData).
+function dataCorteMeses(meses) {
+  const d = new Date();
+  d.setMonth(d.getMonth() - meses);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+const RELATORIO_PERIODOS = [1, 3, 6, 12];
+
+// Donut de status em SVG puro (sem biblioteca) - um anel por segmento,
+// usando stroke-dasharray/dashoffset; numero central + legenda com
+// swatch+valor, pra identidade nunca depender so da cor (segue a mesma
+// regra de acessibilidade das outras telas do app). "centro"/"centroLabel"
+// ficam sobrepostos ao SVG num div posicionado por cima.
+function renderDonutChart(segments, centro, centroLabel, tamanho) {
+  tamanho = tamanho || 120;
+  const total = segments.reduce((s, x) => s + x.value, 0);
+  const cx = tamanho / 2, cy = tamanho / 2, espessura = Math.round(tamanho * 0.133), r = cx - espessura / 2 - 2;
+  const C = 2 * Math.PI * r;
+  let acumulado = 0;
+  const comDados = segments.filter(s => s.value > 0);
+  const arcos = total && comDados.length ? comDados.map(s => {
+    const frac = s.value / total;
+    const arco = `
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" style="stroke:${s.cor}" stroke-width="${espessura}"
+        stroke-dasharray="${(frac * C).toFixed(2)} ${C.toFixed(2)}"
+        stroke-dashoffset="${(-acumulado * C).toFixed(2)}"
+        transform="rotate(-90 ${cx} ${cy})"></circle>
+    `;
+    acumulado += frac;
+    return arco;
+  }).join('') : `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" style="stroke:var(--surface-alt)" stroke-width="${espessura}"></circle>`;
+  const fonteCentro = Math.round(tamanho * 0.183), fonteLabel = Math.round(tamanho * 0.075);
+
+  return `
+    <div class="donut-wrap">
+      <div style="position:relative; width:${tamanho}px; height:${tamanho}px; flex-shrink:0;">
+        <svg width="${tamanho}" height="${tamanho}" viewBox="0 0 ${tamanho} ${tamanho}">${arcos}</svg>
+        <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; text-align:center;">
+          <div style="font-size:${fonteCentro}px; font-weight:700; color:var(--white-strong); line-height:1;">${escapeHtml(String(centro))}</div>
+          <div style="font-size:${fonteLabel}px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em; margin-top:3px;">${escapeHtml(centroLabel)}</div>
+        </div>
+      </div>
+      <div class="donut-legend">
+        ${segments.map(s => `
+          <div class="donut-legend-item">
+            <span class="donut-swatch" style="background:${s.cor};"></span>
+            <span class="donut-legend-label">${escapeHtml(s.label)}</span>
+            <span class="donut-legend-value">${s.value}${total ? ' · ' + Math.round(s.value / total * 100) + '%' : ''}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// Status agrupado em 4 fatias (confirmado/aguardando/faltas justificadas/
+// faltas infracionais) para o donut - familia+trabalho+justificada viram
+// uma unica fatia, igual ao que buildReportText ja agrupa.
+function segmentosDonutStatus(statusPeriodo) {
+  return [
+    { label: 'Confirmado', value: statusPeriodo.confirmado, cor: 'var(--status-confirmado)' },
+    { label: 'Aguardando', value: statusPeriodo.aguardando, cor: 'var(--status-aguardando)' },
+    { label: 'Faltas justificadas', value: statusPeriodo.justificada, cor: 'var(--status-justificada)' },
+    { label: 'Faltas infracionais', value: statusPeriodo.infracional, cor: 'var(--status-infracional)' },
+  ];
+}
+
+// Resumo de um grafico (chave = 'total' ou um TIPOS_EVENTO) numa janela de
+// meses: soma por status (pro donut), % geral e a lista de eventos que
+// entraram na conta (pro drill-down em "Ver eventos").
+function resumoDonutPeriodo(encerrados, chave, meses) {
+  const corte = dataCorteMeses(meses);
+  const doGrupo = encerrados.filter(ev => chave === 'total' || ev.tipo === chave);
+  let somaConfirmados = 0, somaConvidados = 0, eventosNoPeriodo = 0, faltaCarregar = false;
+  const statusPeriodo = { confirmado: 0, aguardando: 0, justificada: 0, infracional: 0 };
+  const itens = [];
+  doGrupo.forEach(ev => {
+    if (!ev.data || ev.data < corte) return;
+    if (!state.reportData[ev.id]) { faltaCarregar = true; return; }
+    const c = computeCounts(ev);
+    const total = ev.memberIds.length;
+    somaConfirmados += c.confirmado;
+    somaConvidados += total;
+    eventosNoPeriodo++;
+    statusPeriodo.confirmado += c.confirmado;
+    statusPeriodo.aguardando += c.aguardando;
+    statusPeriodo.justificada += c.familia + c.trabalho + c.justificada;
+    statusPeriodo.infracional += c.infracional;
+    itens.push({ ev, confirmado: c.confirmado, total, pct: total ? Math.round((c.confirmado / total) * 100) : null });
+  });
+  itens.sort((a, b) => (b.ev.data || '').localeCompare(a.ev.data || ''));
+  return {
+    pct: somaConvidados ? Math.round((somaConfirmados / somaConvidados) * 100) : null,
+    statusPeriodo, somaConfirmados, somaConvidados, eventosNoPeriodo, itens, faltaCarregar
+  };
+}
+
+// Um card do painel: titulo, chips de periodo proprios, donut e a contagem
+// de eventos embaixo - "total" vem maior e centralizado (destaque = true).
+function renderDonutCard(titulo, chave, encerrados, destaque) {
+  const meses = state.relatorioPeriodoPorGrafico[chave] || 3;
+  const r = resumoDonutPeriodo(encerrados, chave, meses);
+  const emoji = chave === 'total' ? '🏁' : emojiTipoEvento(chave);
+  return `
+    <div class="card donut-card${destaque ? ' donut-card-total' : ''}">
+      <div style="font-weight:600; margin-bottom:8px;">${emoji} ${escapeHtml(titulo)}</div>
+      <div class="chip-grid wide" style="margin-bottom:10px;">
+        ${RELATORIO_PERIODOS.map(m => `
+          <button class="chip-option ${meses === m ? 'active' : ''}" data-action="set-relatorio-periodo-tipo" data-chave="${escapeHtml(chave)}" data-value="${m}">${m === 1 ? '1 mês' : m + ' meses'}</button>
+        `).join('')}
+      </div>
+      ${r.faltaCarregar ? '<div class="empty">Carregando…</div>' : renderDonutChart(segmentosDonutStatus(r.statusPeriodo), r.pct === null ? '—' : r.pct + '%', 'presença', destaque ? 150 : 110)}
+      <div class="info-line" style="padding:8px 0 0; color:var(--text-muted); font-size:12px;">
+        ${r.eventosNoPeriodo} ${r.eventosNoPeriodo === 1 ? 'evento encerrado' : 'eventos encerrados'} nesse período
+      </div>
+      ${r.itens.length ? `<div class="btn ghost" style="margin-top:6px; padding:4px 0;" data-action="abrir-relatorio-tipo-detalhe" data-value="${escapeHtml(chave)}">Ver eventos ›</div>` : ''}
+    </div>
+  `;
+}
+
+// Drill-down de um card (chave = 'total' ou um tipo): grafico de barras +
+// tabela dos eventos que entraram na janela escolhida naquele card.
+function conteudoRelatorioTipoDetalhe(encerrados, chave) {
+  const meses = state.relatorioPeriodoPorGrafico[chave] || 3;
+  const r = resumoDonutPeriodo(encerrados, chave, meses);
+  const titulo = chave === 'total' ? 'Presença total' : chave;
+  const emoji = chave === 'total' ? '🏁' : emojiTipoEvento(chave);
+  return `
+    <div class="card" style="margin-bottom:14px;">
+      <div class="btn ghost" style="margin-bottom:10px;" data-action="fechar-relatorio-tipo-detalhe">‹ Voltar ao painel</div>
+      <div style="font-weight:600; margin-bottom:8px;">${emoji} ${escapeHtml(titulo)}</div>
+      ${!r.itens.length ? '<div class="empty">Nenhum evento encerrado nesse período.</div>' : `
+        ${r.itens.map(({ ev, pct }) => `
+          <div class="chart-row">
+            <div class="chart-row-label" title="${escapeHtml(ev.nome)}">${escapeHtml(ev.nome)}</div>
+            <div class="chart-row-track"><div class="chart-row-fill" style="width:${pct || 0}%"></div></div>
+            <div class="chart-row-value">${pct === null ? '…' : pct + '%'}</div>
+          </div>
+        `).join('')}
+        <div style="overflow-x:auto; margin-top:10px;">
+          <table class="relatorio-tabela">
+            <thead><tr><th>Evento</th><th>Data</th><th style="text-align:right;">Confirmados</th><th style="text-align:right;">%</th></tr></thead>
+            <tbody>
+              ${r.itens.map(({ ev, pct, confirmado, total }) => `
+                <tr>
+                  <td>${escapeHtml(ev.nome)}</td>
+                  <td>${ev.data ? formatDataBR(ev.data) : '—'}</td>
+                  <td class="num">${confirmado === null ? '…' : confirmado + '/' + total}</td>
+                  <td class="num">${pct === null ? '…' : pct + '%'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `}
+    </div>
+  `;
+}
+
+// % de cada integrante calculado so a partir dos eventos ENCERRADOS de um
+// tipo especifico - diferente de state.relatorioEstatisticas (que vem do
+// Code.gs e ignora tipo, olha a divisao toda). Convites conta so eventos
+// daquele tipo em que o membro foi convidado (tem linha em Presencas);
+// confirmacoes so as que tem status "confirmado". Roster e o mesmo criterio
+// de membrosDoEscopo()/resolverParsedComRoster (toda a planilha se
+// Regional, so a divisao senao).
+function estatisticasMembrosPorTipo(tipo) {
+  const nomeEscopo = escopoPorChave(state.relatorioEscopo).nome;
+  const membros = state.relatorioEscopo === 'regional' ? state.roster : state.roster.filter(m => m.divisao === nomeEscopo);
+  const eventosTipo = eventosDoRelatorioEscopo().filter(e => e.status === 'encerrado' && e.tipo === tipo);
+
+  const contagem = {};
+  eventosTipo.forEach(ev => {
+    const presencas = state.reportData[ev.id];
+    if (!presencas) return;
+    ev.memberIds.forEach(mid => {
+      if (!contagem[mid]) contagem[mid] = { convites: 0, confirmacoes: 0 };
+      contagem[mid].convites++;
+      if (presencas[mid] && presencas[mid].status === 'confirmado') contagem[mid].confirmacoes++;
+    });
+  });
+
+  return membros.map(m => {
+    const c = contagem[m.id] || { convites: 0, confirmacoes: 0 };
+    return {
+      id: m.id, nome: m.nome, convites: c.convites, confirmacoes: c.confirmacoes,
+      percentual: c.convites ? Math.round((c.confirmacoes / c.convites) * 100) : null
+    };
+  });
+}
+
+// Uma das 4 abas fixas "Relatorio Pub/Bate e Volta/Reuniao/Acao Social":
+// so a tabela de % por evento daquele tipo (sem grafico, sem chips de
+// periodo - todo o historico) + a % de cada integrante so naquele tipo.
+function conteudoRelatorioTipoFixo(tipo) {
+  const eventosTipo = eventosDoRelatorioEscopo()
+    .filter(e => e.status === 'encerrado' && e.tipo === tipo)
+    .sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+  const faltaCarregar = eventosTipo.some(e => !(e.id in state.reportData));
+
+  const linhas = eventosTipo.map(ev => {
+    const c = state.reportData[ev.id] ? computeCounts(ev) : null;
+    const total = ev.memberIds.length;
+    return { ev, confirmado: c ? c.confirmado : null, total, pct: c && total ? Math.round((c.confirmado / total) * 100) : null };
+  });
+
+  const membros = estatisticasMembrosPorTipo(tipo).sort((a, b) => {
+    if (a.percentual === null && b.percentual === null) return a.nome.localeCompare(b.nome);
+    if (a.percentual === null) return 1;
+    if (b.percentual === null) return -1;
+    return b.percentual - a.percentual || a.nome.localeCompare(b.nome);
+  });
+
+  return `
+    <div class="card" style="margin-bottom:14px;">
+      <div style="font-weight:600; margin-bottom:8px;">${emojiTipoEvento(tipo)} Relatório ${escapeHtml(tipo)}</div>
+      ${!eventosTipo.length ? `<div class="empty">Nenhum evento encerrado do tipo "${escapeHtml(tipo)}" ainda.</div>` : faltaCarregar ? '<div class="empty">Carregando…</div>' : `
+        <div style="overflow-x:auto;">
+          <table class="relatorio-tabela">
+            <thead><tr><th>Evento</th><th>Data</th><th style="text-align:right;">Confirmados</th><th style="text-align:right;">%</th></tr></thead>
+            <tbody>
+              ${linhas.map(({ ev, confirmado, total, pct }) => `
+                <tr>
+                  <td>${escapeHtml(ev.nome)}</td>
+                  <td>${ev.data ? formatDataBR(ev.data) : '—'}</td>
+                  <td class="num">${confirmado === null ? '…' : confirmado + '/' + total}</td>
+                  <td class="num">${pct === null ? '…' : pct + '%'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `}
+    </div>
+
+    <div class="card">
+      <div style="font-weight:600; margin-bottom:6px;">% de cada integrante em ${escapeHtml(tipo)}</div>
+      ${faltaCarregar ? '<div class="empty">Carregando…</div>' : !membros.length ? '<div class="empty">Nenhum membro cadastrado ainda.</div>' : membros.map(m => m.percentual === null ? `
+        <div class="card presenca-row">
+          <div class="presenca-nome">${escapeHtml(m.nome)}</div>
+          <div class="presenca-sem-dados">Sem eventos desse tipo ainda</div>
+        </div>
+      ` : `
+        <div class="card presenca-row">
+          <div class="presenca-info">
+            <div class="presenca-nome">${escapeHtml(m.nome)}</div>
+            <div class="presenca-contagem">${m.confirmacoes} de ${m.convites} eventos</div>
+          </div>
+          <div class="presenca-pct-wrap">
+            <div class="presenca-barra"><div class="presenca-barra-fill" style="width:${m.percentual}%"></div></div>
+            <div class="presenca-pct">${m.percentual}%</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+// Pagina principal da tela "Relatorios" depois do PIN: painel com 5 donuts
+// (Presenca total, em destaque no topo, + um por TIPOS_EVENTO alinhados
+// embaixo), cada um com seu proprio periodo (1/3/6/12 meses) e contagem de
+// eventos. Clicar em "Ver eventos" de um card abre o grafico+tabela so
+// daquele grupo (conteudoRelatorioTipoDetalhe).
+function conteudoRelatorioPresenca() {
+  const encerrados = eventosDoRelatorioEscopo().filter(e => e.status === 'encerrado');
+
+  const listaMembros = state.relatorioEstatisticas ? [...state.relatorioEstatisticas].sort((a, b) => {
+    if (a.percentual === null && b.percentual === null) return a.nome.localeCompare(b.nome);
+    if (a.percentual === null) return 1;
+    if (b.percentual === null) return -1;
+    return b.percentual - a.percentual || a.nome.localeCompare(b.nome);
+  }) : null;
+
+  const corpoPrincipal = state.relatorioTipoDetalhe
+    ? conteudoRelatorioTipoDetalhe(encerrados, state.relatorioTipoDetalhe)
+    : `
+      ${renderDonutCard('Presença total', 'total', encerrados, true)}
+      <div class="donut-grid">
+        ${TIPOS_EVENTO.map(tipo => renderDonutCard(tipo, tipo, encerrados, false)).join('')}
+      </div>
+    `;
+
+  return `
+    ${corpoPrincipal}
+
+    <div class="card" style="margin-top:14px;">
+      <div style="font-weight:600; margin-bottom:6px;">% de cada integrante</div>
+      ${state.relatorioEstatisticasError ? `
+        <div class="alert"><div class="alert-msg">${escapeHtml(state.relatorioEstatisticasError)}</div></div>
+        <button class="btn secondary block" data-action="retry-relatorio-estatisticas" style="margin-top:10px;">Tentar de novo</button>
+      ` : state.relatorioEstatisticasLoading || !listaMembros ? '<div class="empty">Calculando…</div>' : !listaMembros.length ? '<div class="empty">Nenhum membro cadastrado ainda.</div>' : listaMembros.map(m => m.percentual === null ? `
+        <div class="card presenca-row">
+          <div class="presenca-nome">${escapeHtml(m.nome)}</div>
+          <div class="presenca-sem-dados">Sem eventos encerrados ainda</div>
+        </div>
+      ` : `
+        <div class="card presenca-row">
+          <div class="presenca-info">
+            <div class="presenca-nome">${escapeHtml(m.nome)}</div>
+            <div class="presenca-contagem">${m.confirmacoes} de ${m.convites} eventos</div>
+          </div>
+          <div class="presenca-pct-wrap">
+            <div class="presenca-barra"><div class="presenca-barra-fill" style="width:${m.percentual}%"></div></div>
+            <div class="presenca-pct">${m.percentual}%</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
 }
 
 async function loadReportData() {
@@ -1854,7 +2957,7 @@ function renderAdminInsights() {
 
 function computeCounts(ev) {
   const statusData = state.reportData[ev.id] || {};
-  const counts = { confirmado: 0, familia: 0, trabalho: 0, aguardando: 0 };
+  const counts = { confirmado: 0, familia: 0, trabalho: 0, aguardando: 0, justificada: 0, infracional: 0 };
   ev.memberIds.forEach(mid => {
     const s = (statusData[mid] && statusData[mid].status) || 'aguardando';
     if (counts[s] !== undefined) counts[s]++; else counts.aguardando++;
@@ -1864,7 +2967,7 @@ function computeCounts(ev) {
 
 function getReportGroups(ev) {
   const statusData = state.reportData[ev.id] || {};
-  const groups = { confirmado: [], familia: [], trabalho: [], aguardando: [] };
+  const groups = { confirmado: [], familia: [], trabalho: [], aguardando: [], justificada: [], infracional: [] };
   ev.memberIds.forEach(mid => {
     const m = state.roster.find(r => r.id === mid);
     if (!m) return;
@@ -1876,11 +2979,12 @@ function getReportGroups(ev) {
 
 function buildReportText(ev) {
   const groups = getReportGroups(ev);
-  // Familia e trabalho sao as duas razoes de falta; juntas viram uma unica
-  // secao "nao puderam ir", com o motivo ao lado de cada nome.
+  // Familia, trabalho e justificada sao razoes de falta justificada; juntas
+  // viram uma unica secao "nao puderam ir", com o motivo ao lado de cada nome.
   const naoPuderamIr = [
     ...groups.familia.map(n => ({ nome: n, motivo: 'Família' })),
     ...groups.trabalho.map(n => ({ nome: n, motivo: 'Trabalho' })),
+    ...groups.justificada.map(n => ({ nome: n, motivo: 'Justificada' })),
   ];
 
   const total = ev.memberIds.length;
@@ -1902,6 +3006,9 @@ function buildReportText(ev) {
   lines.push('');
   lines.push(`⚠️ NÃO RESPONDERAM (${groups.aguardando.length})`);
   lines.push(...(groups.aguardando.length ? groups.aguardando.map(n => '- ' + n) : ['- Todos responderam']));
+  lines.push('');
+  lines.push(`⭕ FALTA INFRACIONAL (${groups.infracional.length})`);
+  lines.push(...(groups.infracional.length ? groups.infracional.map(n => '- ' + n) : ['- Nenhuma']));
   return lines.join('\n');
 }
 
@@ -2025,7 +3132,7 @@ function renderReportDetail(ev) {
 
 function renderAdmin(app) {
   app.innerHTML = `
-    <div class="back-link on-photo" data-action="go-home">‹ Sair do modo organizador</div>
+    <div class="back-link on-photo" data-action="go-divisoes">‹ Trocar divisão</div>
     <div class="event-header">
       <h1 style="font-size: 20px;">Organizador</h1>
       <div class="count-box">${escapeHtml(escopoPorChave(state.adminEscopo).nome.toUpperCase())}</div>
@@ -2242,6 +3349,16 @@ document.getElementById('app').addEventListener('input', (e) => {
   if (e.target.id === 'new-member-nome') {
     state.newMemberNome = e.target.value;
   }
+  if (e.target.id === 'relatorio-texto-field') {
+    state.relatorioTextoBruto = e.target.value;
+  }
+  if (e.target.dataset && e.target.dataset.action === 'resolver-membro') {
+    const i = Number(e.target.dataset.index);
+    const row = state.relatorioParsed.membrosParsed[i];
+    row.membroId = e.target.value || null;
+    row.sugestoes = [];
+    render();
+  }
 });
 
 document.getElementById('app').addEventListener('click', async (e) => {
@@ -2253,6 +3370,20 @@ document.getElementById('app').addEventListener('click', async (e) => {
   if (action === 'retry-load') return loadInitial();
   if (action === 'retry-report') return loadReportData();
   if (action === 'retry-estatisticas') return loadEstatisticas();
+  if (action === 'retry-relatorio-estatisticas') return loadRelatorioEstatisticas();
+  if (action === 'set-relatorio-periodo-tipo') {
+    state.relatorioPeriodoPorGrafico[target.dataset.chave] = Number(target.dataset.value);
+    return render();
+  }
+  if (action === 'abrir-relatorio-tipo-detalhe') {
+    state.relatorioTipoDetalhe = target.dataset.value;
+    return render();
+  }
+  if (action === 'fechar-relatorio-tipo-detalhe') {
+    state.relatorioTipoDetalhe = null;
+    return render();
+  }
+  if (action === 'retry-relatorio-eventos') return loadReportData();
   if (action === 'retry-insight-stats') return loadInsightStats();
   if (action === 'retry-save') return gravarAgora();
   if (action === 'gerar-relatorio') return gerarRelatorio();
@@ -2261,6 +3392,8 @@ document.getElementById('app').addEventListener('click', async (e) => {
   if (action === 'retry-status') return loadEventStatus(state.currentEventId);
   if (action === 'open-event') return openEvent(id);
   if (action === 'go-home') { state.view = 'home'; state.isAdmin = false; state.adminEscopo = null; return render(); }
+  if (action === 'abrir-home-eventos') { state.homeEventosAberto = true; return render(); }
+  if (action === 'fechar-home-eventos') { state.homeEventosAberto = false; state.homeEscopo = null; state.homeTipo = null; return render(); }
   if (action === 'select-home-escopo') { state.homeEscopo = target.dataset.value; state.homeTipo = null; return render(); }
   if (action === 'go-home-escolha') { state.homeEscopo = null; state.homeTipo = null; state.view = 'home'; return render(); }
   if (action === 'select-home-tipo') { state.homeTipo = target.dataset.value; return render(); }
@@ -2297,6 +3430,74 @@ document.getElementById('app').addEventListener('click', async (e) => {
     return render();
   }
   if (action === 'check-pin') return checkPin();
+  if (action === 'go-relatorio-divisoes') {
+    state.view = 'relatorio-divisoes';
+    state.relatorioTextoBruto = '';
+    state.relatorioParsed = null;
+    state.relatorioSalvarErro = null;
+    state.relatorioTab = 'resumo';
+    state.relatorioColarStep = 'texto';
+    state.relatorioEstatisticas = null;
+    state.relatorioCategoriaAlvo = null;
+    state.relatorioTipoEscolhido = null;
+    state.relatorioTipoDetalhe = null;
+    return render();
+  }
+  if (action === 'select-relatorio-divisao') {
+    state.relatorioEscopo = target.dataset.value;
+    // Padrao: a categoria alvo comeca igual ao escopo escolhido (Regional ->
+    // "Regional", Barra -> "Barra") - so muda se a pessoa clicar num botao
+    // de divisao especifica na tela de colar, ver "set-relatorio-categoria".
+    state.relatorioCategoriaAlvo = target.dataset.value;
+    state.view = 'relatorio-pin';
+    state.relatorioPinErro = null;
+    return render();
+  }
+  if (action === 'set-relatorio-categoria') {
+    state.relatorioCategoriaAlvo = target.dataset.value;
+    return render();
+  }
+  if (action === 'set-relatorio-tipo') {
+    state.relatorioTipoEscolhido = state.relatorioTipoEscolhido === target.dataset.value ? null : target.dataset.value;
+    return render();
+  }
+  if (action === 'check-relatorio-pin') return checkRelatorioPin();
+  if (action === 'relatorio-tab') {
+    state.relatorioTab = target.dataset.tab;
+    render();
+    // Eventos, Resumo e as 4 abas de tipo dependem dos dados por evento -
+    // sem isso quem for direto numa dessas abas (sem passar por outra que
+    // ja carregou) fica com "Carregando…" pra sempre, ja que nada mais
+    // dispara essa busca.
+    const precisaReportData = ['eventos', 'resumo', ...TIPOS_EVENTO_TABS_ORDEM].includes(target.dataset.tab);
+    if (precisaReportData) await loadReportData();
+    if (target.dataset.tab === 'resumo') await loadRelatorioEstatisticas();
+    return;
+  }
+  if (action === 'go-relatorio-texto') { state.relatorioColarStep = 'texto'; return render(); }
+  if (action === 'analisar-convocacao') return analisarConvocacao();
+  if (action === 'aceitar-sugestao') {
+    const row = state.relatorioParsed.membrosParsed[Number(target.dataset.index)];
+    row.membroId = target.dataset.id;
+    row.sugestoes = [];
+    return render();
+  }
+  if (action === 'ignorar-membro-parseado') {
+    state.relatorioParsed.membrosParsed[Number(target.dataset.index)].ignorado = true;
+    return render();
+  }
+  if (action === 'reincluir-membro-parseado') {
+    state.relatorioParsed.membrosParsed[Number(target.dataset.index)].ignorado = false;
+    return render();
+  }
+  if (action === 'confirmar-evento-parseado') return confirmarEventoParseado();
+  if (action === 'nova-convocacao') {
+    state.relatorioTextoBruto = '';
+    state.relatorioParsed = null;
+    state.relatorioSalvarErro = null;
+    state.relatorioColarStep = 'texto';
+    return render();
+  }
   if (action === 'admin-tab') {
     state.adminTab = target.dataset.tab;
     state.newEventSelected = null;
