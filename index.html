@@ -198,6 +198,12 @@
     letter-spacing: 0.02em;
   }
   .field { margin-bottom: 14px; }
+  .date-hint {
+    margin-top: 4px;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: var(--text-muted);
+  }
   .event-header {
     margin-bottom: 18px;
   }
@@ -2270,6 +2276,7 @@ function conteudoRelatorioRevisao() {
         <div class="field" style="flex: 1; min-width: 130px;">
           <label>Data</label>
           <input type="date" id="rev-evento-data" value="${escapeHtml(ev.data)}">
+          <div class="date-hint">D · M · A</div>
         </div>
         <div class="field" style="flex: 1; min-width: 100px;">
           <label>Horário</label>
@@ -3454,6 +3461,7 @@ function renderEventForm() {
         <div class="field" style="flex: 1; min-width: 130px;">
           <label>Data</label>
           <input type="date" id="new-event-data" value="${existing && existing.data ? existing.data : ''}">
+          <div class="date-hint">D · M · A</div>
         </div>
         <div class="field" style="flex: 1; min-width: 100px;">
           <label>Horário</label>
