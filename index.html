@@ -2214,7 +2214,13 @@ function conteudoRelatorioRevisao() {
   const naoResolvidos = membros.filter(r => !r.membroId && !r.ignorado);
   const totais = {};
   membros.forEach(r => { if (!r.ignorado) totais[r.status] = (totais[r.status] || 0) + 1; });
-  const podeConfirmar = naoResolvidos.length === 0 && membros.some(r => r.membroId);
+  // Tipo entra aqui porque e escolhido por chip (re-renderiza na hora); Data
+  // e Nome sao campos de texto/data que nao disparam render a cada letra -
+  // por isso ficam de fora do calculo do botao e sao validados so no clique
+  // de "Confirmar" (ver confirmarEventoParseado), senao o botao trava
+  // "desabilitado" sem nunca destravar (mesmo bug que ja corrigimos no
+  // "Analisar").
+  const podeConfirmar = naoResolvidos.length === 0 && membros.some(r => r.membroId) && !!ev.tipo;
 
   const categoriaAlvo = state.relatorioCategoriaAlvo || state.relatorioEscopo;
   const escopoNome = escopoPorChave(categoriaAlvo).nome;
@@ -2238,6 +2244,13 @@ function conteudoRelatorioRevisao() {
         <label>Nome do evento</label>
         <input type="text" id="rev-evento-nome" value="${escapeHtml(ev.nome)}">
       </div>
+      <label>Tipo de evento</label>
+      <div class="chip-grid wide" style="margin-bottom: 14px;">
+        ${TIPOS_EVENTO.map(t => `
+          <button class="chip-option ${ev.tipo === t ? 'active' : ''}" data-action="set-revisao-tipo" data-value="${escapeHtml(t)}">${emojiTipoEvento(t)} ${escapeHtml(t)}</button>
+        `).join('')}
+      </div>
+      ${!ev.tipo ? '<div style="color:#C9A29C; font-size:12.5px; margin:-8px 0 14px;">Obrigatório — escolha o tipo antes de confirmar.</div>' : ''}
       <div class="row-gap" style="margin-bottom: 0;">
         <div class="field" style="flex: 1; min-width: 130px;">
           <label>Data</label>
@@ -2248,6 +2261,7 @@ function conteudoRelatorioRevisao() {
           <input type="time" id="rev-evento-horario" value="${escapeHtml(ev.horario)}">
         </div>
       </div>
+      ${!ev.data ? '<div style="color:#C9A29C; font-size:12.5px; margin:-8px 0 14px;">Sem data no texto colado — preencha antes de confirmar.</div>' : ''}
       <div class="field">
         <label>Endereço</label>
         <input type="text" id="rev-evento-endereco" value="${escapeHtml(ev.endereco)}">
@@ -2339,6 +2353,12 @@ async function confirmarEventoParseado() {
     outros: document.getElementById('rev-evento-outros').value.trim()
   };
   if (!ev.nome) { state.relatorioSalvarErro = 'Preencha o nome do evento.'; return render(); }
+  // Data/tipo/integrantes sao os 3 pontos que o evento sempre precisa
+  // gravar - o texto colado pode nao trazer a data (como nesse exemplo sem
+  // nenhuma data), entao o app exige preencher na mao em vez de salvar em
+  // branco.
+  if (!ev.data) { state.relatorioSalvarErro = 'Preencha a data do evento.'; return render(); }
+  if (!parsed.evento.tipo) { state.relatorioSalvarErro = 'Escolha o tipo de evento.'; return render(); }
 
   const membros = parsed.membrosParsed
     .filter(r => !r.ignorado && r.membroId)
@@ -3664,6 +3684,10 @@ document.getElementById('app').addEventListener('click', async (e) => {
   }
   if (action === 'set-relatorio-categoria') {
     state.relatorioCategoriaAlvo = target.dataset.value;
+    return render();
+  }
+  if (action === 'set-revisao-tipo') {
+    state.relatorioParsed.evento.tipo = state.relatorioParsed.evento.tipo === target.dataset.value ? '' : target.dataset.value;
     return render();
   }
   if (action === 'set-relatorio-tipo') {
