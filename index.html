@@ -1593,7 +1593,9 @@ function parseConvocacaoTexto(texto) {
     if (tipoAchado) evento.tipo = tipoAchado;
   }
 
-  // --- Data: token tipo "09SET26" em qualquer linha ---
+  // --- Data: token tipo "09SET26" (dia+mes abreviado+ano) em qualquer
+  // linha, ou "19/07/2026"/"19/07/26" (numerica, com barra) - tenta o
+  // primeiro formato antes, ja que "SET" nunca bate com o padrao numerico.
   const matchData = texto.match(/(\d{1,2})\s*([A-ZÇ]{3})\s*(\d{2})\b/i);
   if (matchData) {
     const dia = matchData[1].padStart(2, '0');
@@ -1603,6 +1605,19 @@ function parseConvocacaoTexto(texto) {
       evento.data = `${ano}-${String(mesIdx + 1).padStart(2, '0')}-${dia}`;
     } else {
       avisos.push('Não reconheci o mês na data — confira o campo Data.');
+    }
+  } else {
+    const matchDataNumerica = texto.match(/(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})/);
+    if (matchDataNumerica) {
+      const dia = matchDataNumerica[1].padStart(2, '0');
+      const mes = Number(matchDataNumerica[2]);
+      const anoBruto = matchDataNumerica[3];
+      const ano = anoBruto.length === 2 ? String(2000 + Number(anoBruto)) : anoBruto;
+      if (mes >= 1 && mes <= 12) {
+        evento.data = `${ano}-${String(mes).padStart(2, '0')}-${dia}`;
+      } else {
+        avisos.push('Não reconheci a data (mês inválido) — confira o campo Data.');
+      }
     }
   }
 
