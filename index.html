@@ -684,6 +684,11 @@ let state = {
   // divisao, mesmo entrando pelo PIN Regional). Fora do Regional, e sempre
   // igual a relatorioEscopo (nao ha escolha).
   relatorioCategoriaAlvo: null,
+  // Filtro de divisao do painel de Relatorios, so relevante quando o acesso
+  // e pelo PIN Regional - 'todas' agrega tudo, uma chave especifica ('regional'
+  // inclusive) restringe eventos/membros so aquela categoria. Ver
+  // eventosDoRelatorioEscopo()/membrosVisiveisRelatorio().
+  relatorioFiltroDivisao: 'todas',
   // Tipo escolhido na tela de colar (um de TIPOS_EVENTO) - quando marcado,
   // vence o palpite que o parser tenta tirar do titulo do texto colado.
   relatorioTipoEscolhido: null,
@@ -708,6 +713,10 @@ let state = {
   relatorioEstatisticas: null,
   relatorioEstatisticasLoading: false,
   relatorioEstatisticasError: null,
+  // Quais divisoes estao abertas na lista "% de cada integrante" (comeca
+  // tudo fechado - senao o Regional com "Todas as divisões" vira uma
+  // lista sem fim de nomes de cara).
+  relatorioEstatisticasExpandidas: new Set(),
   // Janela (em meses) de cada donut do painel de Presenca - uma chave por
   // grafico ('total' + um por TIPOS_EVENTO), cada um navega o proprio
   // periodo independente dos outros.
@@ -2033,6 +2042,7 @@ async function checkRelatorioPin() {
       state.relatorioTab = 'resumo';
       state.relatorioColarStep = 'texto';
       state.relatorioTipoDetalhe = null;
+      state.relatorioFiltroDivisao = 'todas';
       render();
       await Promise.all([loadReportData(), loadRelatorioEstatisticas()]);
     } else {
@@ -2058,6 +2068,28 @@ const RELATORIO_TABS = [
   ...TIPOS_EVENTO_TABS_ORDEM.map(t => ({ chave: t, label: 'Relatório ' + t })),
 ];
 
+// Nas abas que mostram dados agregados (tudo, exceto "Enviar", que ja tem
+// seu proprio seletor de divisao pra convocacao colada), o Regional ganha
+// um filtro por divisao no topo - "Todas" agrega o clube inteiro, uma
+// divisao especifica restringe so aquela categoria. Ver
+// eventosDoRelatorioEscopo()/membrosVisiveisRelatorio().
+const ABAS_COM_FILTRO_DIVISAO = ['resumo', 'eventos', ...TIPOS_EVENTO_TABS_ORDEM];
+
+function renderRelatorioFiltroDivisao() {
+  if (state.relatorioEscopo !== 'regional' || !ABAS_COM_FILTRO_DIVISAO.includes(state.relatorioTab)) return '';
+  const opcoes = [{ chave: 'todas', nome: 'Todas as divisões' }].concat(escoposEmOrdemDeExibicao());
+  return `
+    <div class="card" style="margin-bottom:14px;">
+      <div style="font-weight:600; margin-bottom:8px;">Filtrar por divisão</div>
+      <div class="chip-grid wide">
+        ${opcoes.map(o => `
+          <button class="chip-option ${state.relatorioFiltroDivisao === o.chave ? 'active' : ''}" data-action="set-relatorio-filtro-divisao" data-value="${o.chave}">${escapeHtml(o.nome)}</button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function renderRelatorioShell(app) {
   const conteudo = state.relatorioTab === 'eventos' ? conteudoRelatorioEventos()
     : state.relatorioTab === 'resumo' ? conteudoRelatorioPresenca()
@@ -2074,6 +2106,7 @@ function renderRelatorioShell(app) {
     <div class="tabs tabs-wrap">
       ${RELATORIO_TABS.map(t => `<div class="tab ${state.relatorioTab === t.chave ? 'active' : ''}" data-action="relatorio-tab" data-tab="${t.chave}">${t.label}</div>`).join('')}
     </div>
+    ${renderRelatorioFiltroDivisao()}
     ${conteudo}
   `;
 }
@@ -2353,11 +2386,33 @@ function conteudoRelatorioResultado() {
 
 // Todos os eventos da divisao/Regional escolhida na tela de Relatorios -
 // tanto os criados colando convocacao quanto os que ja existiam antes
-// (criados pelo Modo organizador), ja que sao o mesmo tipo de registro.
+// (criados pelo Modo organizador), ja que sao o mesmo tipo de registro. No
+// Regional (unica chave-mestra), respeita o filtro de divisao escolhido no
+// topo do painel: 'todas' junta tudo (inclusive convocacoes coladas em nome
+// de uma divisao especifica, que "sumiam" do resumo Regional antes disso
+// existir), uma chave especifica mostra so os eventos daquela categoria -
+// 'regional' inclusive, pros eventos que sao da Regional mesmo.
 function eventosDoRelatorioEscopo() {
   return state.events
-    .filter(e => e.categoria === state.relatorioEscopo)
+    .filter(e => {
+      if (state.relatorioEscopo !== 'regional') return e.categoria === state.relatorioEscopo;
+      return state.relatorioFiltroDivisao === 'todas' || e.categoria === state.relatorioFiltroDivisao;
+    })
     .sort((a, b) => (b.data || '').localeCompare(a.data || '') || (b.criadoEm || '').localeCompare(a.criadoEm || ''));
+}
+
+// Roster visivel no painel de Relatorios, respeitando o mesmo filtro de
+// divisao de eventosDoRelatorioEscopo() - usado pelas abas fixas de tipo
+// ("% de cada integrante em X"), onde faz sentido restringir a lista de
+// nomes tambem, nao so os eventos.
+function membrosVisiveisRelatorio() {
+  if (state.relatorioEscopo !== 'regional') {
+    const nomeEscopo = escopoPorChave(state.relatorioEscopo).nome;
+    return state.roster.filter(m => m.divisao === nomeEscopo);
+  }
+  if (state.relatorioFiltroDivisao === 'todas') return state.roster;
+  const nomeFiltro = escopoPorChave(state.relatorioFiltroDivisao).nome;
+  return state.roster.filter(m => m.divisao === nomeFiltro);
 }
 
 function conteudoRelatorioEventos() {
@@ -2401,7 +2456,12 @@ async function loadRelatorioEstatisticas() {
   state.relatorioEstatisticasError = null;
   render();
   try {
-    const r = await api('estatisticas', { categoria: state.relatorioEscopo });
+    // No Regional, respeita o filtro de divisao do painel - categoria vazia
+    // e o proprio sinal que lerEstatisticasMembros usa pra "sem filtro,
+    // todo mundo" (ver Code.gs), entao "todas" vira uma string vazia.
+    const categoria = state.relatorioEscopo !== 'regional' ? state.relatorioEscopo
+      : (state.relatorioFiltroDivisao === 'todas' ? '' : state.relatorioFiltroDivisao);
+    const r = await api('estatisticas', { categoria });
     state.relatorioEstatisticas = r.membros || [];
   } catch (e) {
     state.relatorioEstatisticasError = e.message;
@@ -2576,12 +2636,10 @@ function conteudoRelatorioTipoDetalhe(encerrados, chave) {
 // tipo especifico - diferente de state.relatorioEstatisticas (que vem do
 // Code.gs e ignora tipo, olha a divisao toda). Convites conta so eventos
 // daquele tipo em que o membro foi convidado (tem linha em Presencas);
-// confirmacoes so as que tem status "confirmado". Roster e o mesmo criterio
-// de membrosDoEscopo()/resolverParsedComRoster (toda a planilha se
-// Regional, so a divisao senao).
+// confirmacoes so as que tem status "confirmado". Roster/eventos respeitam
+// o filtro de divisao do painel (membrosVisiveisRelatorio/eventosDoRelatorioEscopo).
 function estatisticasMembrosPorTipo(tipo) {
-  const nomeEscopo = escopoPorChave(state.relatorioEscopo).nome;
-  const membros = state.relatorioEscopo === 'regional' ? state.roster : state.roster.filter(m => m.divisao === nomeEscopo);
+  const membros = membrosVisiveisRelatorio();
   const eventosTipo = eventosDoRelatorioEscopo().filter(e => e.status === 'encerrado' && e.tipo === tipo);
 
   const contagem = {};
@@ -2598,10 +2656,87 @@ function estatisticasMembrosPorTipo(tipo) {
   return membros.map(m => {
     const c = contagem[m.id] || { convites: 0, confirmacoes: 0 };
     return {
-      id: m.id, nome: m.nome, convites: c.convites, confirmacoes: c.confirmacoes,
+      id: m.id, nome: m.nome, grau: m.grau, divisao: m.divisao, funcoes: m.funcoes,
+      convites: c.convites, confirmacoes: c.confirmacoes,
       percentual: c.convites ? Math.round((c.confirmacoes / c.convites) * 100) : null
     };
   });
+}
+
+// Agrupa uma lista de estatisticas de membro (precisa de nome/divisao/
+// percentual) por divisao - Regional primeiro, resto em ordem alfabetica
+// (mesmo criterio de agruparPorDivisao), mantendo dentro de cada grupo a
+// ordenacao por % (maior primeiro), que e o que da sentido a lista.
+function agruparStatsPorDivisao(lista) {
+  const porDivisao = {};
+  lista.forEach(item => {
+    const chave = item.divisao || 'Sem divisão';
+    (porDivisao[chave] = porDivisao[chave] || []).push(item);
+  });
+  const nomeRegional = escopoPorChave('regional').nome;
+  const ordenadas = Object.keys(porDivisao).sort((a, b) => {
+    if (a === nomeRegional) return -1;
+    if (b === nomeRegional) return 1;
+    return a.localeCompare(b);
+  });
+  return ordenadas.map(divisao => ({
+    divisao,
+    itens: [...porDivisao[divisao]].sort((a, b) => {
+      if (a.percentual === null && b.percentual === null) return a.nome.localeCompare(b.nome);
+      if (a.percentual === null) return 1;
+      if (b.percentual === null) return -1;
+      return b.percentual - a.percentual || a.nome.localeCompare(b.nome);
+    })
+  }));
+}
+
+// Uma linha de "% de cada integrante" - nome + grau (herdado do cadastro,
+// mesmo selo usado no resto do app) + selos de funcao, pra nao ficar so uma
+// lista nua de nomes.
+function renderLinhaEstatisticaMembro(m) {
+  const nomeComGrau = `${escapeHtml(m.nome)}${m.grau ? ` <span class="grade-box">${escapeHtml(m.grau)}</span>` : ''}`;
+  if (m.percentual === null) {
+    return `
+      <div class="card presenca-row">
+        <div class="presenca-info">
+          <div class="presenca-nome">${nomeComGrau}</div>
+          ${linhaFuncoes(m.funcoes)}
+        </div>
+        <div class="presenca-sem-dados">Sem eventos ainda</div>
+      </div>
+    `;
+  }
+  return `
+    <div class="card presenca-row">
+      <div class="presenca-info">
+        <div class="presenca-nome">${nomeComGrau}</div>
+        ${linhaFuncoes(m.funcoes)}
+        <div class="presenca-contagem">${m.confirmacoes} de ${m.convites} eventos</div>
+      </div>
+      <div class="presenca-pct-wrap">
+        <div class="presenca-barra"><div class="presenca-barra-fill" style="width:${m.percentual}%"></div></div>
+        <div class="presenca-pct">${m.percentual}%</div>
+      </div>
+    </div>
+  `;
+}
+
+// "% de cada integrante" agrupada por divisao, com cabecalho recolhivel
+// (mesmo padrao visual de renderSubtituloDivisao/Rank de Insights) - sem
+// isso, o Regional com "Todas as divisões" vira uma lista sem fim de nomes
+// soltos, dificil de achar alguem.
+function renderListaEstatisticasPorDivisao(lista) {
+  const grupos = agruparStatsPorDivisao(lista);
+  return grupos.map(grupo => {
+    const aberto = state.relatorioEstatisticasExpandidas.has(grupo.divisao);
+    return `
+      <div class="division-subheader clicavel" data-action="toggle-relatorio-estatisticas-divisao" data-value="${escapeHtml(grupo.divisao)}">
+        <span>${aberto ? '▾' : '▸'} ${escapeHtml(grupo.divisao.toUpperCase())}</span>
+        <span class="division-counts">${grupo.itens.length} ${grupo.itens.length === 1 ? 'membro' : 'membros'}</span>
+      </div>
+      ${aberto ? grupo.itens.map(renderLinhaEstatisticaMembro).join('') : ''}
+    `;
+  }).join('');
 }
 
 // Uma das 4 abas fixas "Relatorio Pub/Bate e Volta/Reuniao/Acao Social":
@@ -2619,12 +2754,7 @@ function conteudoRelatorioTipoFixo(tipo) {
     return { ev, confirmado: c ? c.confirmado : null, total, pct: c && total ? Math.round((c.confirmado / total) * 100) : null };
   });
 
-  const membros = estatisticasMembrosPorTipo(tipo).sort((a, b) => {
-    if (a.percentual === null && b.percentual === null) return a.nome.localeCompare(b.nome);
-    if (a.percentual === null) return 1;
-    if (b.percentual === null) return -1;
-    return b.percentual - a.percentual || a.nome.localeCompare(b.nome);
-  });
+  const membros = estatisticasMembrosPorTipo(tipo);
 
   return `
     <div class="card" style="margin-bottom:14px;">
@@ -2650,23 +2780,7 @@ function conteudoRelatorioTipoFixo(tipo) {
 
     <div class="card">
       <div style="font-weight:600; margin-bottom:6px;">% de cada integrante em ${escapeHtml(tipo)}</div>
-      ${faltaCarregar ? '<div class="empty">Carregando…</div>' : !membros.length ? '<div class="empty">Nenhum membro cadastrado ainda.</div>' : membros.map(m => m.percentual === null ? `
-        <div class="card presenca-row">
-          <div class="presenca-nome">${escapeHtml(m.nome)}</div>
-          <div class="presenca-sem-dados">Sem eventos desse tipo ainda</div>
-        </div>
-      ` : `
-        <div class="card presenca-row">
-          <div class="presenca-info">
-            <div class="presenca-nome">${escapeHtml(m.nome)}</div>
-            <div class="presenca-contagem">${m.confirmacoes} de ${m.convites} eventos</div>
-          </div>
-          <div class="presenca-pct-wrap">
-            <div class="presenca-barra"><div class="presenca-barra-fill" style="width:${m.percentual}%"></div></div>
-            <div class="presenca-pct">${m.percentual}%</div>
-          </div>
-        </div>
-      `).join('')}
+      ${faltaCarregar ? '<div class="empty">Carregando…</div>' : !membros.length ? '<div class="empty">Nenhum membro cadastrado ainda.</div>' : renderListaEstatisticasPorDivisao(membros)}
     </div>
   `;
 }
@@ -2679,11 +2793,12 @@ function conteudoRelatorioTipoFixo(tipo) {
 function conteudoRelatorioPresenca() {
   const encerrados = eventosDoRelatorioEscopo().filter(e => e.status === 'encerrado');
 
-  const listaMembros = state.relatorioEstatisticas ? [...state.relatorioEstatisticas].sort((a, b) => {
-    if (a.percentual === null && b.percentual === null) return a.nome.localeCompare(b.nome);
-    if (a.percentual === null) return 1;
-    if (b.percentual === null) return -1;
-    return b.percentual - a.percentual || a.nome.localeCompare(b.nome);
+  // state.relatorioEstatisticas vem do Code.gs so com id/nome/convites/
+  // confirmacoes/percentual - junta com state.roster pra ter grau/divisao/
+  // funcoes tambem, pro agrupamento e pros selos na lista.
+  const listaMembros = state.relatorioEstatisticas ? state.relatorioEstatisticas.map(m => {
+    const r = state.roster.find(x => x.id === m.id);
+    return { ...m, grau: r ? r.grau : '', divisao: r ? r.divisao : '', funcoes: r ? r.funcoes : [] };
   }) : null;
 
   const corpoPrincipal = state.relatorioTipoDetalhe
@@ -2703,25 +2818,25 @@ function conteudoRelatorioPresenca() {
       ${state.relatorioEstatisticasError ? `
         <div class="alert"><div class="alert-msg">${escapeHtml(state.relatorioEstatisticasError)}</div></div>
         <button class="btn secondary block" data-action="retry-relatorio-estatisticas" style="margin-top:10px;">Tentar de novo</button>
-      ` : state.relatorioEstatisticasLoading || !listaMembros ? '<div class="empty">Calculando…</div>' : !listaMembros.length ? '<div class="empty">Nenhum membro cadastrado ainda.</div>' : listaMembros.map(m => m.percentual === null ? `
-        <div class="card presenca-row">
-          <div class="presenca-nome">${escapeHtml(m.nome)}</div>
-          <div class="presenca-sem-dados">Sem eventos encerrados ainda</div>
-        </div>
-      ` : `
-        <div class="card presenca-row">
-          <div class="presenca-info">
-            <div class="presenca-nome">${escapeHtml(m.nome)}</div>
-            <div class="presenca-contagem">${m.confirmacoes} de ${m.convites} eventos</div>
-          </div>
-          <div class="presenca-pct-wrap">
-            <div class="presenca-barra"><div class="presenca-barra-fill" style="width:${m.percentual}%"></div></div>
-            <div class="presenca-pct">${m.percentual}%</div>
-          </div>
-        </div>
-      `).join('')}
+      ` : state.relatorioEstatisticasLoading || !listaMembros ? '<div class="empty">Calculando…</div>' : !listaMembros.length ? '<div class="empty">Nenhum membro cadastrado ainda.</div>' : renderListaEstatisticasPorDivisao(listaMembros)}
     </div>
   `;
+}
+
+// Google Sheets recusa lote grande demais de leituras ao mesmo tempo ("Muitos
+// pedidos simultaneos"). Antes disso so acontecia com dezenas de eventos
+// (ex.: depois de gerarDadosFakeTeste); disparando tudo de uma vez com
+// Promise.allSettled, como fazia antes, o navegador manda uma leitura por
+// evento em paralelo sem limite nenhum. Aqui o mesmo trabalho e feito em
+// lotes pequenos, um atras do outro - mais lento, mas nao esbarra no limite.
+async function emLotes(itens, tamanhoDoLote, tarefa) {
+  const resultados = [];
+  for (let i = 0; i < itens.length; i += tamanhoDoLote) {
+    const lote = itens.slice(i, i + tamanhoDoLote);
+    const parciais = await Promise.allSettled(lote.map(tarefa));
+    resultados.push(...parciais);
+  }
+  return resultados;
 }
 
 async function loadReportData() {
@@ -2729,7 +2844,7 @@ async function loadReportData() {
   const missing = encerrados.filter(e => !(e.id in state.reportData));
   state.reportError = null;
   if (missing.length) {
-    const results = await Promise.allSettled(missing.map(e => api('presencas', { eventoId: e.id })));
+    const results = await emLotes(missing, 5, e => api('presencas', { eventoId: e.id }));
     missing.forEach((e, i) => {
       // Um evento sem dado fica de fora de propósito: melhor mostrar traço do
       // que um relatorio dizendo que ninguem confirmou.
@@ -3376,6 +3491,12 @@ document.getElementById('app').addEventListener('click', async (e) => {
   if (action === 'retry-report') return loadReportData();
   if (action === 'retry-estatisticas') return loadEstatisticas();
   if (action === 'retry-relatorio-estatisticas') return loadRelatorioEstatisticas();
+  if (action === 'toggle-relatorio-estatisticas-divisao') {
+    const chave = target.dataset.value;
+    if (state.relatorioEstatisticasExpandidas.has(chave)) state.relatorioEstatisticasExpandidas.delete(chave);
+    else state.relatorioEstatisticasExpandidas.add(chave);
+    return render();
+  }
   if (action === 'set-relatorio-periodo-tipo') {
     state.relatorioPeriodoPorGrafico[target.dataset.chave] = Number(target.dataset.value);
     return render();
@@ -3383,6 +3504,13 @@ document.getElementById('app').addEventListener('click', async (e) => {
   if (action === 'abrir-relatorio-tipo-detalhe') {
     state.relatorioTipoDetalhe = target.dataset.value;
     return render();
+  }
+  if (action === 'set-relatorio-filtro-divisao') {
+    state.relatorioFiltroDivisao = target.dataset.value;
+    state.relatorioTipoDetalhe = null;
+    render();
+    await loadRelatorioEstatisticas();
+    return;
   }
   if (action === 'fechar-relatorio-tipo-detalhe') {
     state.relatorioTipoDetalhe = null;
@@ -3446,6 +3574,8 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.relatorioCategoriaAlvo = null;
     state.relatorioTipoEscolhido = null;
     state.relatorioTipoDetalhe = null;
+    state.relatorioFiltroDivisao = 'todas';
+    state.relatorioEstatisticasExpandidas = new Set();
     return render();
   }
   if (action === 'select-relatorio-divisao') {
