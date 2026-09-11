@@ -1368,7 +1368,10 @@ var PREFIXO_TESTE = 'TESTE-';
 
 function gerarDadosFakeTeste() {
   var nomesFake = ['Silva', 'Costa', 'Souza', 'Alves', 'Pereira', 'Lima', 'Gomes', 'Ramos', 'Dias', 'Nunes', 'Barros', 'Rocha'];
-  var tipos = ['Bate e Volta', 'Ação Social', 'PUB'];
+  // Precisa bater exatamente com TIPOS_EVENTO do index.html (inclusive
+  // acentuacao/caixa) - senao o evento fake fica com um tipo que nenhuma
+  // aba "Relatorio X" reconhece.
+  var tipos = ['Bate e Volta', 'Ação Social', 'Pub', 'Reunião'];
   var statusPossiveis = ['Confirmado', 'Confirmado', 'Confirmado', 'Aguardando', 'Familia', 'Trabalho'];
   function sorteia(lista) { return lista[Math.floor(Math.random() * lista.length)]; }
 
@@ -1382,7 +1385,7 @@ function gerarDadosFakeTeste() {
       var id = novoId();
       var nome = PREFIXO_TESTE + nomeDivisao.split(' ')[0] + ' ' + sorteia(nomesFake) + ' ' + (i + 1);
       novosMembros.push([id, nome, '', nomeDivisao, '']);
-      membrosPorChave[chave].push({ id: id, nome: nome });
+      membrosPorChave[chave].push({ id: id, nome: nome, divisao: nomeDivisao });
     }
   });
   var sMembros = aba(ABA_MEMBROS, CAB_MEMBROS);
@@ -1423,19 +1426,50 @@ function gerarDadosFakeTeste() {
   var sPresencas = aba(ABA_PRESENCAS, CAB_PRESENCAS);
   sPresencas.getRange(sPresencas.getLastRow() + 1, 1, novasPresencas.length, CAB_PRESENCAS.length).setValues(novasPresencas);
 
+  // Rodadas de Insight fake, uma por semana nos ultimos 2 meses ou so -
+  // Regional fica de fora (mesma regra de membrosElegiveisInsight). O ID de
+  // cada rodada tambem comeca com PREFIXO_TESTE, pra removerDadosFakeTeste
+  // conseguir apagar so as rodadas/presencas fake sem mexer nas de verdade
+  // (a linha de presenca de insight nao guarda nome com prefixo sozinha -
+  // "Membro" ate tem o PREFIXO_TESTE por vir de um membro fake, mas e mais
+  // direto/seguro filtrar pelo ID da rodada).
+  var novasRodadas = [];
+  var novasInsightPresencas = [];
+  var numRodadasFake = 6 + Math.floor(Math.random() * 5);
+  for (var rd = 0; rd < numRodadasFake; rd++) {
+    var idRodada = PREFIXO_TESTE + novoId();
+    var dataRodada = new Date();
+    dataRodada.setDate(dataRodada.getDate() - rd * 7 - Math.floor(Math.random() * 3));
+    var dataRodadaIso = Utilities.formatDate(dataRodada, fuso(), 'yyyy-MM-dd');
+    novasRodadas.push([idRodada, dataRodadaIso, agora()]);
+
+    todosMembros.forEach(function (m) {
+      novasInsightPresencas.push([idRodada, m.id, m.nome, m.divisao, simNao(Math.random() < 0.65)]);
+    });
+  }
+  var sInsightRodadas = aba(ABA_INSIGHT_RODADAS, CAB_INSIGHT_RODADAS);
+  sInsightRodadas.getRange(sInsightRodadas.getLastRow() + 1, 1, novasRodadas.length, CAB_INSIGHT_RODADAS.length).setValues(novasRodadas);
+  var sInsightPresencas = aba(ABA_INSIGHT_PRESENCAS, CAB_INSIGHT_PRESENCAS);
+  sInsightPresencas.getRange(sInsightPresencas.getLastRow() + 1, 1, novasInsightPresencas.length, CAB_INSIGHT_PRESENCAS.length).setValues(novasInsightPresencas);
+
   atualizarRelatorio();
   atualizarAbaRegional();
   atualizarAbasDivisoes();
   organizarAbas();
 
   Logger.log(novosMembros.length + ' membros, ' + novosEventos.length + ' eventos, ' + novasPresencas.length +
-    ' presencas fake criados. Rode removerDadosFakeTeste() quando terminar de olhar a planilha.');
+    ' presencas, ' + novasRodadas.length + ' rodadas de insight fake criados. Rode removerDadosFakeTeste() quando terminar de olhar a planilha.');
 }
 
 function removerDadosFakeTeste() {
   apagarLinhas(aba(ABA_PRESENCAS, CAB_PRESENCAS), function (l) { return String(l[1]).indexOf(PREFIXO_TESTE) === 0; });
   apagarLinhas(aba(ABA_EVENTOS, CAB_EVENTOS), function (l) { return String(l[1]).indexOf(PREFIXO_TESTE) === 0; });
   apagarLinhas(aba(ABA_MEMBROS, CAB_MEMBROS), function (l) { return String(l[1]).indexOf(PREFIXO_TESTE) === 0; });
+  // ID Rodada comeca com PREFIXO_TESTE nas rodadas fake (ver gerarDadosFakeTeste) -
+  // filtra pelo ID em vez do nome do membro, ja que uma rodada de verdade
+  // poderia, em teoria, ter um membro cujo nome comece igual por coincidencia.
+  apagarLinhas(aba(ABA_INSIGHT_PRESENCAS, CAB_INSIGHT_PRESENCAS), function (l) { return String(l[0]).indexOf(PREFIXO_TESTE) === 0; });
+  apagarLinhas(aba(ABA_INSIGHT_RODADAS, CAB_INSIGHT_RODADAS), function (l) { return String(l[0]).indexOf(PREFIXO_TESTE) === 0; });
 
   atualizarRelatorio();
   atualizarAbaRegional();
