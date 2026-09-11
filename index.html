@@ -1569,16 +1569,27 @@ function parseConvocacaoTexto(texto) {
   const avisos = [];
   const evento = { nome: '', tipo: '', data: '', horario: '', endereco: '', outros: '' };
 
-  // --- Titulo do evento: a ultima linha nao-vazia antes de uma linha "Evento" ---
+  // --- Titulo do evento: a ultima linha nao-vazia antes de uma linha
+  // "Evento" (formato com secoes tipo "🎯 DESTINO 🎯"); sem essa linha
+  // (formato mais simples, ex.: "Bate volta divisão Barra" logo na
+  // primeira linha), usa a primeira linha nao vazia do texto inteiro.
   const idxEvento = linhas.findIndex(l => l.toLowerCase() === 'evento');
   if (idxEvento > 0) {
     for (let i = idxEvento - 1; i >= 0; i--) {
       if (linhas[i]) { evento.nome = stripEmoji(linhas[i]).trim(); break; }
     }
+  } else {
+    const primeiraLinha = linhas.find(l => l);
+    if (primeiraLinha) evento.nome = stripEmoji(primeiraLinha).trim();
   }
   if (evento.nome) {
     const nomeNorm = normalizarNome(evento.nome);
-    const tipoAchado = TIPOS_EVENTO.find(t => nomeNorm.includes(normalizarNome(t)));
+    // Bate por palavra, nao pela frase inteira - "Bate volta" (sem o "e")
+    // ainda precisa reconhecer o tipo "Bate e Volta".
+    const tipoAchado = TIPOS_EVENTO.find(t => {
+      const tokens = normalizarNome(t).split(' ').filter(tok => tok && tok !== 'e' && tok !== 'de');
+      return tokens.every(tok => nomeNorm.includes(tok));
+    });
     if (tipoAchado) evento.tipo = tipoAchado;
   }
 
@@ -1595,18 +1606,24 @@ function parseConvocacaoTexto(texto) {
     }
   }
 
-  // --- Endereco: entre a linha com "DESTINO" e a proxima secao ---
+  // --- Endereco: "Destino: X" numa linha so, ou (formato com secoes) entre
+  // a linha "🎯 DESTINO 🎯" e a proxima secao ---
   const idxDestino = linhas.findIndex(l => /destino/i.test(l));
   if (idxDestino !== -1) {
-    const enderecoLinhas = [];
-    for (let i = idxDestino + 1; i < linhas.length; i++) {
-      const l = linhas[i];
-      if (!l) continue;
-      if (/^\.{4,}$/.test(l) || /horários/i.test(l) || /⏰/.test(l)) break;
-      if (/^https?:\/\//i.test(l)) { evento.outros = evento.outros ? evento.outros + '\n' + l : l; continue; }
-      enderecoLinhas.push(l);
+    const matchDestinoInline = linhas[idxDestino].match(/destino\s*:\s*(.+)/i);
+    if (matchDestinoInline && matchDestinoInline[1].trim()) {
+      evento.endereco = stripEmoji(matchDestinoInline[1]).trim();
+    } else {
+      const enderecoLinhas = [];
+      for (let i = idxDestino + 1; i < linhas.length; i++) {
+        const l = linhas[i];
+        if (!l) continue;
+        if (/^\.{4,}$/.test(l) || /horários/i.test(l) || /⏰/.test(l) || /^resposta\s*:?\s*$/i.test(l)) break;
+        if (/^https?:\/\//i.test(l)) { evento.outros = evento.outros ? evento.outros + '\n' + l : l; continue; }
+        enderecoLinhas.push(l);
+      }
+      evento.endereco = enderecoLinhas.join(', ');
     }
-    evento.endereco = enderecoLinhas.join(', ');
   }
 
   // --- Horarios: Destacamento / Briefing / Inicio ---
@@ -1629,23 +1646,31 @@ function parseConvocacaoTexto(texto) {
   }
 
   // --- Lista de membros ---
-  const idxMembros = linhas.findIndex(l => /membros/i.test(l));
+  // Duas convencoes vistas na pratica: um cabecalho "👥 MEMBROS 👥" (com
+  // numeracao "01. Nome (Grau) status") ou simplesmente uma linha "Lista:"
+  // seguida dos nomes sem numero (ex.: "Costa(VI)✅").
+  const idxMembros = linhas.findIndex(l => /membros/i.test(l) || /^lista\s*:?\s*$/i.test(l));
   const membrosParsed = [];
   if (idxMembros !== -1) {
     let divisaoAtual = '';
     // Nome tolera qualquer caixa (maiuscula/minuscula/acentuada) - a
     // convocacao real vem toda em CAIXA ALTA, mas um nome digitado errado
     // (ou colado de outro lugar) nao pode sumir da lista silenciosamente.
-    const memberRe = /^(\d{1,3})\.\s*([A-Za-zÀ-ÖØ-öø-ÿ0-9][A-Za-zÀ-ÖØ-öø-ÿ0-9 .'\-]*?)\s*\(([IVXivx]+)\)\s*(.*)$/;
+    // O numero antes do nome e opcional (algumas listas nao numeram); o
+    // grau aceita qualquer texto entre parenteses, nao so numeral romano -
+    // um grau fora do padrao (ex.: "camisa") ainda entra na lista, so com
+    // aviso pra conferir na revisao, em vez de sumir sem explicacao.
+    const memberRe = /^(?:(\d{1,3})\.\s*)?([A-Za-zÀ-ÖØ-öø-ÿ0-9][A-Za-zÀ-ÖØ-öø-ÿ0-9 .'\-]*?)\s*\(([^)]+)\)\s*(.*)$/;
     for (let i = idxMembros + 1; i < linhas.length; i++) {
       const l = linhas[i];
       if (/^participa[çc][ãa]o/i.test(l)) break; // legenda - fim da lista
       if (/^divis[ãa]o\s+/i.test(l)) { divisaoAtual = l.replace(/^divis[ãa]o\s+/i, 'Divisão ').trim(); continue; }
       const m = l.match(memberRe);
       if (!m) continue;
-      const [, numero, nomeTexto, grauTexto, resto] = m;
-      const grau = grauTexto.toUpperCase();
-      if (GRAUS.indexOf(grau) === -1) avisos.push(`Grau "${grauTexto}" (linha ${numero}) não reconhecido.`);
+      const [, numeroBruto, nomeTexto, grauBruto, resto] = m;
+      const numero = numeroBruto || String(membrosParsed.length + 1).padStart(2, '0');
+      const grau = grauBruto.trim().toUpperCase();
+      if (GRAUS.indexOf(grau) === -1) avisos.push(`Grau "${grauBruto.trim()}" (${nomeTexto.trim()}) não reconhecido — confira antes de confirmar.`);
       membrosParsed.push({
         numero,
         nomeTexto: nomeTexto.trim(),
@@ -1661,7 +1686,7 @@ function parseConvocacaoTexto(texto) {
       });
     }
   } else {
-    avisos.push('Não encontrei a seção "MEMBROS" no texto colado.');
+    avisos.push('Não encontrei a lista de membros (procure por uma seção "MEMBROS" ou "Lista:") no texto colado.');
   }
 
   return { evento, membrosParsed, avisos };
