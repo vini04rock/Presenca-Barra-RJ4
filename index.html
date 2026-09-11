@@ -1369,29 +1369,34 @@ function renderRankInsightsConteudo(d) {
   const totalConfirmacoes = d.membros.reduce((soma, m) => soma + m.confirmacoes, 0);
   const totalPct = totalRodadas ? Math.round((totalConfirmacoes / totalRodadas) * 100) : null;
 
+  // Donut de 2 fatias (fez/nao fez) - Insight nao tem motivo de falta como
+  // os eventos (so Sim/Nao), entao so precisa das 2 cores, nao das 4 do
+  // status de presenca.
   const cardTotal = `
-    <div class="card" style="padding: 14px 16px; margin-bottom:12px; border-color: var(--line-strong);">
-      <div class="member-row" style="border-bottom:none; padding:0;">
-        <div class="member-head" style="cursor:default;">
-          <span class="member-name" style="font-family:'Rye',serif; font-size:17px;">💡 Rank Total de Insights</span>
-          <span class="status-badge status-confirmado" style="font-size:15px; padding:7px 14px;">${linhaPct(totalPct)}</span>
-        </div>
-      </div>
-      <div style="color:var(--text-muted); font-size:12px; margin-top:8px;">${d.rodadas} ${d.rodadas === 1 ? 'rodada registrada' : 'rodadas registradas'}</div>
+    <div class="card donut-card donut-card-total" style="margin-bottom:14px;">
+      <div style="font-weight:600; margin-bottom:8px; font-family:'Rye',serif; font-size:17px;">💡 Rank Total de Insights</div>
+      ${renderDonutChart([
+        { label: 'Fez', value: totalConfirmacoes, cor: 'var(--status-confirmado)' },
+        { label: 'Não fez', value: Math.max(0, totalRodadas - totalConfirmacoes), cor: 'var(--status-aguardando)' },
+      ], totalPct === null ? '—' : totalPct + '%', 'fazem', 150)}
+      <div class="info-line" style="padding:8px 0 0; color:var(--text-muted); font-size:12.5px;">${d.rodadas} ${d.rodadas === 1 ? 'rodada registrada' : 'rodadas registradas'}</div>
     </div>
   `;
 
   const blocoDivisoes = `
-    <div class="card" style="padding: 4px 16px; margin-bottom:16px;">
+    <div class="donut-grid" style="margin-bottom:16px;">
       ${divisoesSemRegional().map(e => {
         const item = porChave(e.chave);
+        const fez = item ? item.mediaPorRodada : 0;
+        const naoFez = Math.max(0, (item ? item.mediaTotalPorRodada : 0) - fez);
         return `
-          <div class="member-row">
-            <div class="member-head">
-              <span class="member-name">${escapeHtml(e.nome)}</span>
-              <span class="status-badge status-confirmado">${linhaPct(item && item.percentual)}</span>
-            </div>
-            <div style="color:var(--text-muted); font-size:11.5px; margin-top:3px;">${item ? item.mediaPorRodada : 0}/${item ? item.mediaTotalPorRodada : 0} fazem, em média, por rodada</div>
+          <div class="card donut-card">
+            <div style="font-weight:600; margin-bottom:8px;">${escapeHtml(e.nome)}</div>
+            ${renderDonutChart([
+              { label: 'Fez', value: fez, cor: 'var(--status-confirmado)' },
+              { label: 'Não fez', value: naoFez, cor: 'var(--status-aguardando)' },
+            ], linhaPct(item && item.percentual), 'fazem', 110)}
+            <div class="info-line" style="padding:8px 0 0; color:var(--text-muted); font-size:12px;">${fez}/${item ? item.mediaTotalPorRodada : 0} fazem, em média, por rodada</div>
           </div>
         `;
       }).join('')}
