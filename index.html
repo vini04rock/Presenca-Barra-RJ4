@@ -2700,6 +2700,53 @@ function segmentosDonutStatus(statusPeriodo) {
   ];
 }
 
+// Quem mais acumulou falta infracional num periodo - separado do "% de cada
+// integrante" (que mistura confirmado/aguardando/faltas justificadas na
+// mesma media) porque infracional e o dado que interessa pra acao
+// disciplinar, e fica diluido demais dentro de uma % geral.
+function rankingFaltasInfracionais(encerrados, meses) {
+  const corte = dataCorteMeses(meses);
+  const porMembro = {};
+  encerrados.forEach(ev => {
+    if (!ev.data || ev.data < corte) return;
+    const statusData = state.reportData[ev.id];
+    if (!statusData) return;
+    ev.memberIds.forEach(mid => {
+      const s = (statusData[mid] && statusData[mid].status) || 'aguardando';
+      if (s === 'infracional') porMembro[mid] = (porMembro[mid] || 0) + 1;
+    });
+  });
+  return Object.keys(porMembro)
+    .map(id => {
+      const m = state.roster.find(r => r.id === id);
+      return { id, nome: m ? m.nome : id, divisao: m ? m.divisao : '', total: porMembro[id] };
+    })
+    .sort((a, b) => b.total - a.total || a.nome.localeCompare(b.nome));
+}
+
+// Painel opcional acima de "% de cada integrante", no mesmo periodo
+// escolhido pro card "Presenca total" (ver renderDonutCard) - some sozinho
+// quando ninguem tem falta infracional no periodo, pra nao virar um card
+// vazio disputando espaco com o resto do resumo.
+function renderRankingFaltasInfracionais(encerrados) {
+  const meses = state.relatorioPeriodoPorGrafico.total || 3;
+  const mostrarDivisao = state.relatorioEscopo === 'regional' && state.relatorioFiltroDivisao === 'todas';
+  const ranking = rankingFaltasInfracionais(encerrados, meses).filter(r => r.total > 0).slice(0, 8);
+  if (!ranking.length) return '';
+  return `
+    <div class="card" style="margin-top:14px;">
+      <div style="font-weight:600; margin-bottom:2px;">⚠️ Mais faltas infracionais</div>
+      <div style="color:var(--text-muted); font-size:12px; margin-bottom:8px;">Últimos ${meses === 1 ? 'mês' : meses + ' meses'}</div>
+      ${ranking.map(r => `
+        <div class="info-line" style="display:flex; justify-content:space-between; align-items:center;">
+          <span>${escapeHtml(r.nome)}${mostrarDivisao && r.divisao ? ` <span style="color:var(--text-muted); font-size:11.5px;">· ${escapeHtml(r.divisao)}</span>` : ''}</span>
+          <span style="font-weight:700; color:var(--status-infracional);">${r.total}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
 // Resumo de um grafico (chave = 'total' ou um TIPOS_EVENTO) numa janela de
 // meses: soma por status (pro donut), % geral e a lista de eventos que
 // entraram na conta (pro drill-down em "Ver eventos").
@@ -2968,6 +3015,7 @@ function conteudoRelatorioPresenca() {
       <div class="donut-grid">
         ${TIPOS_EVENTO.map(tipo => renderDonutCard(tipo, tipo, encerrados, false)).join('')}
       </div>
+      ${renderRankingFaltasInfracionais(encerrados)}
     `;
 
   return `
