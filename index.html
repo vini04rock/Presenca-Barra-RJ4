@@ -749,6 +749,10 @@ let state = {
   // a pessoa esta.
   relatorioColarStep: 'texto',
   relatorioTextoBruto: '',
+  // Id do evento sendo corrigido (colar convocacao de novo por cima de um
+  // evento ja existente, em vez de criar outro) - null quando o fluxo de
+  // colar e pra um evento novo. Ver iniciarCorrecaoConvocacao.
+  relatorioEditandoEventoId: null,
   // Guarda o resultado do parser: { evento: {...}, membrosParsed: [...], avisos: [...] }.
   // Cada item de membrosParsed carrega seu proprio membroId/ignorado/sugestoes,
   // editados direto pela tela de revisao (sem precisar de um mapa separado).
@@ -2216,7 +2220,7 @@ function conteudoRelatorioColar() {
   // convocacao regional inteira (varias divisoes juntas) quanto a
   // convocacao de uma divisao especifica sem precisar do PIN dela. Fora do
   // Regional so existe uma opcao (a propria divisao), entao nao mostra nada.
-  const seletorDivisao = state.relatorioEscopo === 'regional' ? `
+  const seletorDivisao = state.relatorioEscopo === 'regional' && !state.relatorioEditandoEventoId ? `
     <div class="card" style="margin-bottom:14px;">
       <div style="font-weight:600; margin-bottom:8px;">Essa convocação é de qual divisão?</div>
       <div class="chip-grid wide">
@@ -2226,7 +2230,16 @@ function conteudoRelatorioColar() {
       </div>
     </div>
   ` : '';
+  const eventoEmCorrecao = state.relatorioEditandoEventoId ? state.events.find(e => e.id === state.relatorioEditandoEventoId) : null;
+  const bannerCorrecao = eventoEmCorrecao ? `
+    <div class="alert info" style="margin-bottom:14px;">
+      <div class="alert-title">✏️ Corrigindo: ${escapeHtml(eventoEmCorrecao.nome)}</div>
+      <div class="alert-msg">Cole a convocação corrigida abaixo. Ela substitui a lista de presença desse evento - não cria outro.</div>
+      <div class="btn ghost" style="margin-top:8px; padding:2px 0;" data-action="cancelar-correcao-convocacao">Cancelar correção</div>
+    </div>
+  ` : '';
   return `
+    ${bannerCorrecao}
     ${seletorDivisao}
     <div class="card" style="margin-bottom:14px;">
       <div style="font-weight:600; margin-bottom:8px;">Tipo de evento</div>
@@ -2246,6 +2259,27 @@ function conteudoRelatorioColar() {
   `;
 }
 
+// Reabre o fluxo de colar convocacao apontado pra um evento ja existente
+// (ver o botao "Corrigir" em renderCardEvento) - ao confirmar, salva por
+// cima do mesmo evento (mesmo id) em vez de criar outro. So funciona pra
+// eventos encerrados porque so esses nascem do fluxo de colar convocacao
+// (criarEventoDeTexto sempre cria o evento ja encerrado).
+function iniciarCorrecaoConvocacao(id) {
+  const ev = state.events.find(e => e.id === id);
+  if (!ev) return;
+  state.relatorioEditandoEventoId = id;
+  state.relatorioCategoriaAlvo = ev.categoria;
+  state.relatorioTipoEscolhido = ev.tipo || null;
+  state.relatorioTextoBruto = '';
+  state.relatorioParsed = null;
+  state.relatorioSalvarErro = null;
+  state.relatorioDuplicidadeAviso = null;
+  state.relatorioDuplicidadeConfirmada = false;
+  state.relatorioTab = 'enviar';
+  state.relatorioColarStep = 'texto';
+  render();
+}
+
 function analisarConvocacao() {
   // Le direto do campo (nao so de state.relatorioTextoBruto) - o campo nao
   // dispara um re-render a cada letra digitada, entao o valor no state pode
@@ -2256,6 +2290,18 @@ function analisarConvocacao() {
   if (!state.relatorioTextoBruto.trim()) return;
 
   const parsed = parseConvocacaoTexto(state.relatorioTextoBruto);
+  // Ao corrigir uma convocacao ja enviada, o texto colado de novo pode ser
+  // so a lista corrigida, sem repetir data/horario/endereco/outros - sem
+  // isso, um campo que o parser nao achou no texto novo apagaria o valor
+  // que ja estava salvo em vez de manter.
+  if (state.relatorioEditandoEventoId) {
+    const original = state.events.find(e => e.id === state.relatorioEditandoEventoId);
+    if (original) {
+      ['nome', 'data', 'horario', 'endereco', 'outros'].forEach(campo => {
+        if (!parsed.evento[campo]) parsed.evento[campo] = original[campo];
+      });
+    }
+  }
   // O tipo escolhido nos botoes acima da caixa de texto vence o palpite do
   // parser (que so tenta adivinhar pelo titulo do texto colado) - mais
   // confiavel que depender do texto ter uma palavra reconhecivel.
@@ -2280,9 +2326,11 @@ function analisarConvocacao() {
 // forte de convocacao colada duas vezes por engano (ou duplo clique em
 // "Confirmar"). Nao bloqueia - so avisa, porque duas divisoes podem ter
 // eventos legitimos no mesmo dia, ou o clube pode ter dois eventos no mesmo
-// dia de fato.
-function eventosPossivelmenteDuplicados(data, categoria) {
-  return state.events.filter(e => e.data === data && e.categoria === categoria);
+// dia de fato. excluirId tira o proprio evento da conta ao corrigir uma
+// convocacao ja enviada (ver iniciarCorrecaoConvocacao) - senao o evento
+// sempre "bateria" contra ele mesmo.
+function eventosPossivelmenteDuplicados(data, categoria, excluirId) {
+  return state.events.filter(e => e.data === data && e.categoria === categoria && e.id !== excluirId);
 }
 
 const STATUS_TOTAIS_LABEL = {
@@ -2458,7 +2506,7 @@ async function confirmarEventoParseado() {
 
   const categoria = state.relatorioCategoriaAlvo || state.relatorioEscopo;
   if (!state.relatorioDuplicidadeConfirmada) {
-    const duplicatas = eventosPossivelmenteDuplicados(ev.data, categoria);
+    const duplicatas = eventosPossivelmenteDuplicados(ev.data, categoria, state.relatorioEditandoEventoId);
     if (duplicatas.length) { state.relatorioDuplicidadeAviso = duplicatas; return render(); }
   }
   state.relatorioDuplicidadeAviso = null;
@@ -2472,6 +2520,13 @@ async function confirmarEventoParseado() {
   render();
   try {
     const r = await apiPost('criarEventoDeTexto', {
+      // Vazio quando e uma convocacao nova - o Code.gs cria um id novo
+      // sozinho (ver salvarEvento). Quando e uma correcao (ver
+      // iniciarCorrecaoConvocacao), manda o id do evento original: o mesmo
+      // salvarEvento faz upsert em vez de criar outro, e
+      // ajustarParticipantesComStatus substitui a lista de presencas
+      // inteira pela nova (adiciona quem entrou, remove quem saiu).
+      id: state.relatorioEditandoEventoId || undefined,
       nome: ev.nome, data: ev.data, horario: ev.horario, endereco: ev.endereco, outros: ev.outros,
       // A categoria do evento e a divisao escolhida na tela de colar
       // (relatorioCategoriaAlvo), nao o escopo de acesso (relatorioEscopo) -
@@ -2487,6 +2542,12 @@ async function confirmarEventoParseado() {
       membros: membros
     });
     state.relatorioSalvoEventoId = r.id;
+    // Se for uma correcao, o evento ja tinha presencas cacheadas em
+    // state.reportData de antes - loadReportData() so busca o que "falta"
+    // (id ainda nao presente no cache), entao sem apagar a entrada antiga
+    // aqui o Resumo continuaria mostrando os numeros de antes da correcao
+    // ate a pagina ser recarregada inteira.
+    delete state.reportData[r.id];
     await loadInitial();
     state.relatorioColarStep = 'resultado';
   } catch (e) {
@@ -2519,7 +2580,7 @@ function conteudoRelatorioResultado() {
   const pct = total ? Math.round((groups.confirmado.length / total) * 100) : 0;
 
   return `
-    <div style="font-weight:600; font-size:15px; margin-bottom:10px;">✅ Evento criado: ${escapeHtml(ev.nome)}</div>
+    <div style="font-weight:600; font-size:15px; margin-bottom:10px;">✅ Evento ${state.relatorioEditandoEventoId ? 'corrigido' : 'criado'}: ${escapeHtml(ev.nome)}</div>
     <div class="card">
       <div class="info-line"><b>${pct}% de presença</b> (${groups.confirmado.length} de ${total})</div>
       <div class="info-line">✅ Confirmados: ${groups.confirmado.length}</div>
@@ -2576,6 +2637,7 @@ function renderCardEvento(ev) {
       <div>
         <div class="name">${escapeHtml(ev.nome)}</div>
         <div class="meta">${ev.data ? formatDataBR(ev.data) + ' · ' : ''}${ev.status === 'encerrado' ? 'Encerrado' : 'Ativo'}${pct !== null ? ' · ' + pct + '% presença' : ''}</div>
+        ${ev.status === 'encerrado' ? `<div class="btn ghost" style="margin-top:6px; padding:2px 0; font-size:12px; display:inline-block;" data-action="corrigir-convocacao" data-id="${ev.id}">✏️ Corrigir</div>` : ''}
       </div>
       <div class="arrow">›</div>
     </div>
@@ -3862,6 +3924,7 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.relatorioSalvarErro = null;
     state.relatorioDuplicidadeAviso = null;
     state.relatorioDuplicidadeConfirmada = false;
+    state.relatorioEditandoEventoId = null;
     state.relatorioTab = 'resumo';
     state.relatorioColarStep = 'texto';
     state.relatorioEstatisticas = null;
@@ -3941,7 +4004,16 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.relatorioSalvarErro = null;
     state.relatorioDuplicidadeAviso = null;
     state.relatorioDuplicidadeConfirmada = false;
+    state.relatorioEditandoEventoId = null;
     state.relatorioColarStep = 'texto';
+    return render();
+  }
+  if (action === 'corrigir-convocacao') return iniciarCorrecaoConvocacao(id);
+  if (action === 'cancelar-correcao-convocacao') {
+    state.relatorioEditandoEventoId = null;
+    state.relatorioCategoriaAlvo = null;
+    state.relatorioTipoEscolhido = null;
+    state.relatorioTextoBruto = '';
     return render();
   }
   if (action === 'admin-tab') {

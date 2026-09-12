@@ -21,7 +21,7 @@
 
 // Marcador para conferir o que esta publicado de fato: basta chamar a URL do
 // Web App com ?action=versao. Subir sempre junto com as alteracoes.
-var VERSAO = '2026-09-10-v-insights-backend';
+var VERSAO = '2026-09-12-v-corrigir-convocacao';
 
 var ABA_MEMBROS = 'Membros';
 var ABA_EVENTOS = 'Eventos';
@@ -939,24 +939,43 @@ function ajustarParticipantes(eventoId, nomeEvento, membroIds) {
 // colada (criarEventoDeTexto): cada participante ja entra com o status e as
 // flags que o parser leu do texto, em vez de sempre "Aguardando". membros e
 // uma lista de { id, status, direto, destacado, acompanhado }.
+//
+// Tambem e o caminho usado pra CORRIGIR uma convocacao ja enviada (colar de
+// novo por cima do mesmo evento, ver acao "corrigir-convocacao" no
+// index.html) - por isso, diferente de uma versao anterior desta funcao, um
+// membro que ja tem linha aqui tem o status/flags regravados quando o texto
+// colado de novo traz algo diferente, em vez de so ser ignorado (que deixaria
+// a correcao sem efeito nenhum pra quem ja estava na lista original).
 function ajustarParticipantesComStatus(eventoId, nomeEvento, membros) {
   var s = aba(ABA_PRESENCAS, CAB_PRESENCAS);
-  var atuais = {};
-  linhas(s).forEach(function (l) {
-    if (String(l[0]) === String(eventoId)) atuais[String(l[2])] = true;
+  var linhaPorMembro = {};
+  linhas(s).forEach(function (l, i) {
+    if (String(l[0]) === String(eventoId) && l[2]) linhaPorMembro[String(l[2])] = { indice: i + 2, valores: l };
   });
 
   var linhasNovas = [];
   membros.forEach(function (m) {
-    if (atuais[m.id]) return;
-    linhasNovas.push([
-      eventoId, nomeEvento, m.id, nomeDe(ABA_MEMBROS, CAB_MEMBROS, m.id),
-      STATUS_ROTULO[m.status] || STATUS_ROTULO.aguardando,
-      simNao(ehVerdadeiro(m.direto)),
-      simNao(ehVerdadeiro(m.destacado)),
-      simNao(ehVerdadeiro(m.acompanhado)),
-      agora()
-    ]);
+    var statusRotulo = STATUS_ROTULO[m.status] || STATUS_ROTULO.aguardando;
+    var direto = simNao(ehVerdadeiro(m.direto));
+    var destacado = simNao(ehVerdadeiro(m.destacado));
+    var acompanhado = simNao(ehVerdadeiro(m.acompanhado));
+    var existente = linhaPorMembro[m.id];
+    if (!existente) {
+      linhasNovas.push([eventoId, nomeEvento, m.id, nomeDe(ABA_MEMBROS, CAB_MEMBROS, m.id),
+                         statusRotulo, direto, destacado, acompanhado, agora()]);
+      return;
+    }
+    // So regrava se algo de fato mudou - uma correcao normalmente acerta
+    // 1 ou 2 pessoas, nao a lista inteira, entao a maioria cai aqui sem
+    // gerar escrita nenhuma.
+    var v = existente.valores;
+    var mudou = statusRotulo !== v[4] || direto !== v[5] || destacado !== v[6] || acompanhado !== v[7];
+    if (mudou) {
+      s.getRange(existente.indice, 1, 1, 9).setValues([[
+        eventoId, nomeEvento, m.id, nomeDe(ABA_MEMBROS, CAB_MEMBROS, m.id),
+        statusRotulo, direto, destacado, acompanhado, agora()
+      ]]);
+    }
   });
   if (linhasNovas.length) {
     var proximaLinha = s.getLastRow() + 1;
