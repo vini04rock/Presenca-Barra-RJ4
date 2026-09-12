@@ -525,6 +525,34 @@
   .revisao-row-bottom select { flex: 1 1 180px; min-width: 0; }
   .revisao-sugestoes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .revisao-sugestoes .chip-option { padding: 4px 10px; font-size: 12px; }
+
+  /* Impressao/PDF do Resumo Relatorio - .no-print esconde controles que so
+     fazem sentido na tela (abas, chips de periodo, filtro, "Ver eventos");
+     .print-only e o oposto, texto que so aparece no papel (qual periodo/
+     filtro estava selecionado, ja que os chips somem). Redefinir as
+     variaveis de cor em vez de sobrescrever cada seletor: o app inteiro ja
+     e construido em cima delas, entao um :root novo dentro de @media print
+     basta pra virar claro sem duplicar regra por regra. */
+  .print-only { display: none; }
+  @media print {
+    .no-print { display: none !important; }
+    .print-only { display: block; }
+    body::before { display: none !important; }
+    :root {
+      --bg: #ffffff;
+      --surface: #ffffff;
+      --surface-alt: #f2f2f0;
+      --line: #cccccc;
+      --line-strong: #999999;
+      --text: #111111;
+      --text-muted: #555555;
+      --white-strong: #000000;
+      --danger-line: #b23c34;
+    }
+    body { background: #fff !important; }
+    .card { box-shadow: none !important; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
 </style>
 </head>
 <body>
@@ -2145,8 +2173,9 @@ const ABAS_COM_FILTRO_DIVISAO = ['resumo', 'eventos', ...TIPOS_EVENTO_TABS_ORDEM
 function renderRelatorioFiltroDivisao() {
   if (state.relatorioEscopo !== 'regional' || !ABAS_COM_FILTRO_DIVISAO.includes(state.relatorioTab)) return '';
   const opcoes = [{ chave: 'todas', nome: 'Todas as divisões' }].concat(escoposEmOrdemDeExibicao());
+  const nomeFiltroAtivo = opcoes.find(o => o.chave === state.relatorioFiltroDivisao).nome;
   return `
-    <div class="card" style="margin-bottom:14px;">
+    <div class="card no-print" style="margin-bottom:14px;">
       <div style="font-weight:600; margin-bottom:8px;">Filtrar por divisão</div>
       <div class="chip-grid wide">
         ${opcoes.map(o => `
@@ -2154,6 +2183,7 @@ function renderRelatorioFiltroDivisao() {
         `).join('')}
       </div>
     </div>
+    <div class="print-only" style="margin-bottom:10px; font-size:13px; color:var(--text-muted);">Filtro: ${escapeHtml(nomeFiltroAtivo)}</div>
   `;
 }
 
@@ -2165,12 +2195,12 @@ function renderRelatorioShell(app) {
     : conteudoRelatorioColar();
 
   app.innerHTML = `
-    <div class="back-link on-photo" data-action="go-relatorio-divisoes">‹ Trocar divisão</div>
+    <div class="back-link on-photo no-print" data-action="go-relatorio-divisoes">‹ Trocar divisão</div>
     <div class="crest-wrap" style="margin-bottom: 8px;">
       <h1 style="font-size: 19px;">Relatórios</h1>
       <div class="sub">${escapeHtml(escopoPorChave(state.relatorioEscopo).nome)}</div>
     </div>
-    <div class="tabs tabs-wrap">
+    <div class="tabs tabs-wrap no-print">
       ${RELATORIO_TABS.map(t => `<div class="tab ${state.relatorioTab === t.chave ? 'active' : ''}" data-action="relatorio-tab" data-tab="${t.chave}">${t.label}</div>`).join('')}
     </div>
     ${renderRelatorioFiltroDivisao()}
@@ -2827,17 +2857,18 @@ function renderDonutCard(titulo, chave, encerrados, destaque) {
   return `
     <div class="card donut-card${destaque ? ' donut-card-total' : ''}">
       <div style="font-weight:600; margin-bottom:8px;">${emoji} ${escapeHtml(titulo)}</div>
-      <div class="chip-grid wide" style="margin-bottom:10px;">
+      <div class="chip-grid wide no-print" style="margin-bottom:10px;">
         ${RELATORIO_PERIODOS.map(m => `
           <button class="chip-option ${meses === m ? 'active' : ''}" data-action="set-relatorio-periodo-tipo" data-chave="${escapeHtml(chave)}" data-value="${m}">${m === 1 ? '1 mês' : m + ' meses'}</button>
         `).join('')}
       </div>
+      <div class="print-only" style="margin-bottom:10px; font-size:12px; color:var(--text-muted);">Período: últimos ${meses === 1 ? 'mês' : meses + ' meses'}</div>
       ${r.faltaCarregar ? '<div class="empty">Carregando…</div>' : renderDonutChart(segmentosDonutStatus(r.statusPeriodo), r.pct === null ? '—' : r.pct + '%', 'presença', destaque ? 150 : 110)}
       <div class="info-line" style="padding:8px 0 0; color:var(--text-muted); font-size:12px;">
         ${r.eventosNoPeriodo} ${r.eventosNoPeriodo === 1 ? 'evento encerrado' : 'eventos encerrados'} nesse período
       </div>
       ${destaque && !r.faltaCarregar ? renderSparklineTendencia(r.itens) : ''}
-      ${r.itens.length ? `<div class="btn ghost" style="margin-top:6px; padding:4px 0;" data-action="abrir-relatorio-tipo-detalhe" data-value="${escapeHtml(chave)}">Ver eventos ›</div>` : ''}
+      ${r.itens.length ? `<div class="btn ghost no-print" style="margin-top:6px; padding:4px 0;" data-action="abrir-relatorio-tipo-detalhe" data-value="${escapeHtml(chave)}">Ver eventos ›</div>` : ''}
     </div>
   `;
 }
@@ -3061,6 +3092,9 @@ function conteudoRelatorioPresenca() {
     `;
 
   return `
+    <div class="print-only" style="margin-bottom:10px; font-size:12px; color:var(--text-muted);">Gerado em ${escapeHtml(new Date().toLocaleString('pt-BR'))}</div>
+    <button class="btn secondary block no-print" style="margin-bottom:14px;" data-action="imprimir-relatorio">🖨️ Imprimir / Exportar PDF</button>
+
     ${corpoPrincipal}
 
     <div class="card" style="margin-top:14px;">
@@ -3774,6 +3808,7 @@ document.getElementById('app').addEventListener('click', async (e) => {
     return render();
   }
   if (action === 'retry-relatorio-eventos') return loadReportData();
+  if (action === 'imprimir-relatorio') { window.print(); return; }
   if (action === 'retry-insight-stats') return loadInsightStats();
   if (action === 'retry-save') return gravarAgora();
   if (action === 'gerar-relatorio') return gerarRelatorio();
