@@ -2779,6 +2779,47 @@ function resumoDonutPeriodo(encerrados, chave, meses) {
 
 // Um card do painel: titulo, chips de periodo proprios, donut e a contagem
 // de eventos embaixo - "total" vem maior e centralizado (destaque = true).
+// Linha de tendencia (sparkline) em SVG puro - mesma tecnica de
+// stroke-dasharray/path do donut, sem lib nenhuma. So conecta pontos com %
+// valido (eventos ainda sem reportData carregado ficam de fora da linha em
+// vez de virar um buraco em 0%, que mentiria sobre a presenca). Usada so no
+// card "Presença total" (destaque) - nos 4 cards de tipo, lado a lado num
+// grid pequeno, o grafico ficaria pequeno demais pra informar algo.
+function renderSparklineTendencia(itens) {
+  const cronologico = itens.slice().sort((a, b) => (a.ev.data || '').localeCompare(b.ev.data || ''));
+  const validos = cronologico.filter(x => x.pct !== null);
+  if (validos.length < 2) return '';
+
+  const largura = 280, altura = 56, margem = 6;
+  const n = cronologico.length;
+  const pontos = cronologico.map((x, i) => ({
+    x: n > 1 ? margem + (i / (n - 1)) * (largura - margem * 2) : largura / 2,
+    y: x.pct === null ? null : altura - margem - (x.pct / 100) * (altura - margem * 2),
+    pct: x.pct, nome: x.ev.nome, data: x.ev.data
+  }));
+
+  let caminho = '';
+  pontos.forEach(p => { if (p.y !== null) caminho += (caminho ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1) + ' '; });
+  const bolinhas = pontos.filter(p => p.y !== null).map(p => `
+    <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.5" fill="var(--white-strong)">
+      <title>${escapeHtml(p.nome)}${p.data ? ' — ' + formatDataBR(p.data) : ''}: ${p.pct}%</title>
+    </circle>
+  `).join('');
+
+  return `
+    <div style="margin-top:10px;">
+      <svg width="100%" height="${altura}" viewBox="0 0 ${largura} ${altura}" preserveAspectRatio="none" style="display:block;">
+        <path d="${caminho.trim()}" fill="none" stroke="var(--white-strong)" stroke-width="1.5"></path>
+        ${bolinhas}
+      </svg>
+      <div style="display:flex; justify-content:space-between; font-size:10.5px; color:var(--text-muted); margin-top:2px;">
+        <span>${cronologico[0].ev.data ? formatDataBR(cronologico[0].ev.data) : ''}</span>
+        <span>${cronologico[cronologico.length - 1].ev.data ? formatDataBR(cronologico[cronologico.length - 1].ev.data) : ''}</span>
+      </div>
+    </div>
+  `;
+}
+
 function renderDonutCard(titulo, chave, encerrados, destaque) {
   const meses = state.relatorioPeriodoPorGrafico[chave] || 3;
   const r = resumoDonutPeriodo(encerrados, chave, meses);
@@ -2795,6 +2836,7 @@ function renderDonutCard(titulo, chave, encerrados, destaque) {
       <div class="info-line" style="padding:8px 0 0; color:var(--text-muted); font-size:12px;">
         ${r.eventosNoPeriodo} ${r.eventosNoPeriodo === 1 ? 'evento encerrado' : 'eventos encerrados'} nesse período
       </div>
+      ${destaque && !r.faltaCarregar ? renderSparklineTendencia(r.itens) : ''}
       ${r.itens.length ? `<div class="btn ghost" style="margin-top:6px; padding:4px 0;" data-action="abrir-relatorio-tipo-detalhe" data-value="${escapeHtml(chave)}">Ver eventos ›</div>` : ''}
     </div>
   `;
