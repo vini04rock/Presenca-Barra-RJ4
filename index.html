@@ -511,6 +511,20 @@
   }
   .alert-msg { font-size: 12.5px; color: var(--text-muted); line-height: 1.6; }
   .member-row.travado { opacity: 0.4; pointer-events: none; }
+
+  /* Revisao da convocacao colada - cards empilhados em vez de tabela, pra
+     nao depender de scroll horizontal em celular (a tabela antiga tinha 4
+     colunas e um <select> dentro, ruim de usar com o dedo). */
+  .revisao-row { padding: 10px 0; border-top: 1px solid var(--line); }
+  .revisao-row:first-child { border-top: none; }
+  .revisao-row.ignorado { opacity: .5; }
+  .revisao-row-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+  .revisao-nome { font-size: 14px; color: var(--white-strong); }
+  .revisao-status { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+  .revisao-row-bottom { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .revisao-row-bottom select { flex: 1 1 180px; min-width: 0; }
+  .revisao-sugestoes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .revisao-sugestoes .chip-option { padding: 4px 10px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -2294,21 +2308,11 @@ function conteudoRelatorioRevisao() {
       </div>
     </div>
 
-    <div class="card" style="margin-top:14px; overflow-x:auto;">
+    <div class="card" style="margin-top:14px;">
       <div style="font-weight:600; margin-bottom:8px;">Membros lidos da lista (${membros.length})</div>
-      <table style="width:100%; border-collapse:collapse; font-size:13.5px;">
-        <thead>
-          <tr style="text-align:left; color:var(--text-muted);">
-            <th style="padding:6px 4px;">Nome (texto)</th>
-            <th style="padding:6px 4px;">Cadastro</th>
-            <th style="padding:6px 4px;">Status</th>
-            <th style="padding:6px 4px;"></th>
-          </tr>
-        </thead>
-        <tbody>
-          ${membros.map((r, i) => renderLinhaRevisao(r, i, candidatosDropdown)).join('')}
-        </tbody>
-      </table>
+      <div class="revisao-list">
+        ${membros.map((r, i) => renderLinhaRevisao(r, i, candidatosDropdown)).join('')}
+      </div>
     </div>
 
     ${naoResolvidos.length ? `
@@ -2339,28 +2343,28 @@ function conteudoRelatorioRevisao() {
 function renderLinhaRevisao(r, i, candidatos) {
   const s = STATUS[r.status];
   return `
-    <tr style="border-top:1px solid var(--border); ${r.ignorado ? 'opacity:.5;' : ''}">
-      <td style="padding:6px 4px;">${escapeHtml(r.nomeTexto)} <span style="color:var(--text-muted);">(${escapeHtml(r.grauTexto)})</span></td>
-      <td style="padding:6px 4px;">
-        ${r.ignorado ? '<span style="color:var(--text-muted);">Ignorado</span>' : `
-          <select data-action="resolver-membro" data-index="${i}" style="max-width:170px;">
+    <div class="revisao-row${r.ignorado ? ' ignorado' : ''}">
+      <div class="revisao-row-top">
+        <div class="revisao-nome">${escapeHtml(r.nomeTexto)} <span style="color:var(--text-muted);">(${escapeHtml(r.grauTexto)})</span></div>
+        <div class="revisao-status">${s.emoji} ${s.label}</div>
+      </div>
+      <div class="revisao-row-bottom">
+        ${r.ignorado ? '<span style="color:var(--text-muted); font-size:13px;">Ignorado</span>' : `
+          <select data-action="resolver-membro" data-index="${i}">
             <option value="">— selecionar —</option>
             ${candidatos.map(m => `<option value="${m.id}" ${r.membroId === m.id ? 'selected' : ''}>${escapeHtml(m.nome)}${m.grau ? ' (' + escapeHtml(m.grau) + ')' : ''}</option>`).join('')}
           </select>
-          ${!r.membroId && r.sugestoes.length ? `
-            <div style="margin-top:4px;">
-              ${r.sugestoes.map(m => `<span class="chip-option" style="display:inline-block; margin:2px 4px 0 0;" data-action="aceitar-sugestao" data-index="${i}" data-id="${m.id}">Quis dizer ${escapeHtml(m.nome)}?</span>`).join('')}
-            </div>
-          ` : ''}
         `}
-      </td>
-      <td style="padding:6px 4px; white-space:nowrap;">${s.emoji} ${s.label}</td>
-      <td style="padding:6px 4px;">
         <span class="btn ghost" style="padding:2px 8px; font-size:12px;" data-action="${r.ignorado ? 'reincluir-membro-parseado' : 'ignorar-membro-parseado'}" data-index="${i}">
           ${r.ignorado ? 'Reincluir' : 'Ignorar'}
         </span>
-      </td>
-    </tr>
+      </div>
+      ${!r.ignorado && !r.membroId && r.sugestoes.length ? `
+        <div class="revisao-sugestoes">
+          ${r.sugestoes.map(m => `<span class="chip-option" data-action="aceitar-sugestao" data-index="${i}" data-id="${m.id}">Quis dizer ${escapeHtml(m.nome)}?</span>`).join('')}
+        </div>
+      ` : ''}
+    </div>
   `;
 }
 
