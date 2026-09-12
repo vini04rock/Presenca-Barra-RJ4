@@ -2231,6 +2231,10 @@ function analisarConvocacao() {
   // colando so a convocacao da Curicica precisa que os nomes batam com o
   // elenco da Curicica, nao com a planilha toda.
   parsed.membrosParsed = resolverParsedComRoster(parsed.membrosParsed, state.relatorioCategoriaAlvo || state.relatorioEscopo);
+  // Foto do momento em que o parser terminou de rodar, antes de qualquer
+  // correção manual - é o que mede "quão bem o parser se saiu", diferente
+  // de naoResolvidos (que muda a cada correção feita na tela de revisão).
+  parsed.autoResolvidos = parsed.membrosParsed.filter(r => r.membroId).length;
   state.relatorioParsed = parsed;
   state.relatorioColarStep = 'revisao';
   render();
@@ -2309,7 +2313,10 @@ function conteudoRelatorioRevisao() {
     </div>
 
     <div class="card" style="margin-top:14px;">
-      <div style="font-weight:600; margin-bottom:8px;">Membros lidos da lista (${membros.length})</div>
+      <div style="font-weight:600; margin-bottom:4px;">Membros lidos da lista (${membros.length})</div>
+      <div style="font-size:12.5px; margin-bottom:10px; color:${parsed.autoResolvidos === membros.length ? 'var(--status-confirmado)' : 'var(--text-muted)'};">
+        ${parsed.autoResolvidos === membros.length ? '✅' : '⚠️'} ${parsed.autoResolvidos} de ${membros.length} nomes reconhecidos automaticamente${parsed.autoResolvidos < membros.length ? ' — confira os demais abaixo' : ''}
+      </div>
       <div class="revisao-list">
         ${membros.map((r, i) => renderLinhaRevisao(r, i, candidatosDropdown)).join('')}
       </div>
