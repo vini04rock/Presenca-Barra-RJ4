@@ -525,6 +525,20 @@
   .revisao-row-bottom select { flex: 1 1 180px; min-width: 0; }
   .revisao-sugestoes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .revisao-sugestoes .chip-option { padding: 4px 10px; font-size: 12px; }
+  .texto-original-pre {
+    white-space: pre-wrap;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--surface-alt);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 10px;
+    margin: 8px 0 0;
+    max-height: 260px;
+    overflow-y: auto;
+    cursor: text;
+  }
 
   /* Impressao/PDF do Resumo Relatorio - .no-print esconde controles que so
      fazem sentido na tela (abas, chips de periodo, filtro, "Ver eventos");
@@ -776,6 +790,8 @@ let state = {
   // Mesma ideia, para a aba Eventos agrupada por divisao (Regional +
   // "Todas as divisões").
   relatorioEventosExpandidos: new Set(),
+  // Quais eventos tem o "Ver texto original" (ver renderCardEvento) aberto.
+  relatorioTextoOriginalExpandido: new Set(),
   // Janela (em meses) de cada donut do painel de Presenca - uma chave por
   // grafico ('total' + um por TIPOS_EVENTO), cada um navega o proprio
   // periodo independente dos outros.
@@ -2346,14 +2362,6 @@ function conteudoRelatorioRevisao() {
   const naoResolvidos = membros.filter(r => !r.membroId && !r.ignorado);
   const totais = {};
   membros.forEach(r => { if (!r.ignorado) totais[r.status] = (totais[r.status] || 0) + 1; });
-  // Tipo entra aqui porque e escolhido por chip (re-renderiza na hora); Data
-  // e Nome sao campos de texto/data que nao disparam render a cada letra -
-  // por isso ficam de fora do calculo do botao e sao validados so no clique
-  // de "Confirmar" (ver confirmarEventoParseado), senao o botao trava
-  // "desabilitado" sem nunca destravar (mesmo bug que ja corrigimos no
-  // "Analisar").
-  const podeConfirmar = naoResolvidos.length === 0 && membros.some(r => r.membroId) && !!ev.tipo;
-
   const categoriaAlvo = state.relatorioCategoriaAlvo || state.relatorioEscopo;
   const escopoNome = escopoPorChave(categoriaAlvo).nome;
   const candidatosDropdown = categoriaAlvo === 'regional'
@@ -2376,13 +2384,15 @@ function conteudoRelatorioRevisao() {
         <label>Nome do evento</label>
         <input type="text" id="rev-evento-nome" value="${escapeHtml(ev.nome)}">
       </div>
-      <label>Tipo de evento</label>
-      <div class="chip-grid wide" style="margin-bottom: 14px;">
-        ${TIPOS_EVENTO.map(t => `
-          <button class="chip-option ${ev.tipo === t ? 'active' : ''}" data-action="set-revisao-tipo" data-value="${escapeHtml(t)}">${emojiTipoEvento(t)} ${escapeHtml(t)}</button>
-        `).join('')}
+      <div id="rev-secao-tipo">
+        <label>Tipo de evento</label>
+        <div class="chip-grid wide" style="margin-bottom: 14px;">
+          ${TIPOS_EVENTO.map(t => `
+            <button class="chip-option ${ev.tipo === t ? 'active' : ''}" data-action="set-revisao-tipo" data-value="${escapeHtml(t)}">${emojiTipoEvento(t)} ${escapeHtml(t)}</button>
+          `).join('')}
+        </div>
+        ${!ev.tipo ? '<div style="color:#C9A29C; font-size:12.5px; margin:-8px 0 14px;">Obrigatório — escolha o tipo antes de confirmar.</div>' : ''}
       </div>
-      ${!ev.tipo ? '<div style="color:#C9A29C; font-size:12.5px; margin:-8px 0 14px;">Obrigatório — escolha o tipo antes de confirmar.</div>' : ''}
       <div class="row-gap" style="margin-bottom: 0;">
         <div class="field" style="flex: 1; min-width: 130px;">
           <label>Data</label>
@@ -2405,7 +2415,7 @@ function conteudoRelatorioRevisao() {
       </div>
     </div>
 
-    <div class="card" style="margin-top:14px;">
+    <div class="card" id="rev-membros-lista" style="margin-top:14px;">
       <div style="font-weight:600; margin-bottom:4px;">Membros lidos da lista (${membros.length})</div>
       <div style="font-size:12.5px; margin-bottom:10px; color:${parsed.autoResolvidos === membros.length ? 'var(--status-confirmado)' : 'var(--text-muted)'};">
         ${parsed.autoResolvidos === membros.length ? '✅' : '⚠️'} ${parsed.autoResolvidos} de ${membros.length} nomes reconhecidos automaticamente${parsed.autoResolvidos < membros.length ? ' — confira os demais abaixo' : ''}
@@ -2446,7 +2456,7 @@ function conteudoRelatorioRevisao() {
         </div>
       </div>
     ` : `
-      <button class="btn block" style="margin-top:14px;" data-action="confirmar-evento-parseado" ${podeConfirmar && !state.relatorioSalvando ? '' : 'disabled'}>
+      <button class="btn block" style="margin-top:14px;" data-action="confirmar-evento-parseado" ${state.relatorioSalvando ? 'disabled' : ''}>
         ${state.relatorioSalvando ? 'Salvando…' : 'Confirmar e criar evento'}
       </button>
     `}
@@ -2481,6 +2491,14 @@ function renderLinhaRevisao(r, i, candidatos) {
   `;
 }
 
+// Usado pelas validacoes de confirmarEventoParseado - o botao "Confirmar"
+// fica la embaixo da tela, entao um aviso que so aparece perto do campo
+// (ex.: "escolha o tipo") passa batido se a pagina nao rolar sozinha ate lá.
+function scrollParaElemento(id) {
+  const el = document.getElementById(id);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 async function confirmarEventoParseado() {
   if (state.relatorioSalvando) return;
   const parsed = state.relatorioParsed;
@@ -2496,13 +2514,45 @@ async function confirmarEventoParseado() {
   // encontrada), os inputs sao reconstruidos a partir de parsed.evento, e
   // sem isso a edicao que a pessoa acabou de fazer no campo se perderia.
   Object.assign(parsed.evento, ev);
-  if (!ev.nome) { state.relatorioSalvarErro = 'Preencha o nome do evento.'; return render(); }
-  // Data/tipo/integrantes sao os 3 pontos que o evento sempre precisa
-  // gravar - o texto colado pode nao trazer a data (como nesse exemplo sem
-  // nenhuma data), entao o app exige preencher na mao em vez de salvar em
-  // branco.
-  if (!ev.data) { state.relatorioSalvarErro = 'Preencha a data do evento.'; return render(); }
-  if (!parsed.evento.tipo) { state.relatorioSalvarErro = 'Escolha o tipo de evento.'; return render(); }
+  // O botao fica sempre clicavel (nao "disabled" por validacao) porque um
+  // botao desabilitado nao avisa nada - a pessoa clica, nada acontece, e o
+  // aviso de verdade (ex.: "escolha o tipo") fica la em cima, fora da tela,
+  // perto de onde o campo esta. Por isso cada checagem aqui rola a pagina
+  // ate o ponto do problema, em vez de so acender um texto que ninguem ve.
+  if (!ev.nome) {
+    state.relatorioSalvarErro = 'Preencha o nome do evento.';
+    render();
+    scrollParaElemento('rev-evento-nome');
+    return;
+  }
+  // Data/tipo/integrantes sao os pontos que o evento sempre precisa gravar -
+  // o texto colado pode nao trazer a data (como nesse exemplo sem nenhuma
+  // data), entao o app exige preencher na mao em vez de salvar em branco.
+  if (!ev.data) {
+    state.relatorioSalvarErro = 'Preencha a data do evento.';
+    render();
+    scrollParaElemento('rev-evento-data');
+    return;
+  }
+  if (!parsed.evento.tipo) {
+    state.relatorioSalvarErro = 'Escolha o tipo de evento.';
+    render();
+    scrollParaElemento('rev-secao-tipo');
+    return;
+  }
+  const naoResolvidos = parsed.membrosParsed.filter(r => !r.ignorado && !r.membroId);
+  if (naoResolvidos.length) {
+    state.relatorioSalvarErro = naoResolvidos.length + ' nome(s) sem correspondência - escolha o membro certo (ou "Ignorar") na lista abaixo.';
+    render();
+    scrollParaElemento('rev-membros-lista');
+    return;
+  }
+  if (!parsed.membrosParsed.some(r => r.membroId)) {
+    state.relatorioSalvarErro = 'Nenhum membro pra salvar - resolva pelo menos um nome antes de confirmar.';
+    render();
+    scrollParaElemento('rev-membros-lista');
+    return;
+  }
 
   const categoria = state.relatorioCategoriaAlvo || state.relatorioEscopo;
   if (!state.relatorioDuplicidadeConfirmada) {
@@ -2539,7 +2589,10 @@ async function confirmarEventoParseado() {
       // membro contar esse evento na hora (so eventos encerrados entram na
       // conta, ver lerEstatisticasMembros no Code.gs).
       status: 'encerrado',
-      membros: membros
+      membros: membros,
+      // Guardado pra dar pra conferir depois exatamente o que foi colado,
+      // sem depender do WhatsApp - ver "Ver texto original" em renderCardEvento.
+      textoOriginal: state.relatorioTextoBruto
     });
     state.relatorioSalvoEventoId = r.id;
     // Se for uma correcao, o evento ja tinha presencas cacheadas em
@@ -2632,12 +2685,29 @@ function renderCardEvento(ev) {
     ? (() => { const c = computeCounts(ev); const total = ev.memberIds.length;
                 return total ? Math.round((c.confirmado / total) * 100) : 0; })()
     : null;
+  const textoAberto = state.relatorioTextoOriginalExpandido.has(ev.id);
+  const confirmandoExclusao = state.confirmDeleteId === ev.id;
   return `
     <div class="card event-card" data-action="open-event" data-id="${ev.id}">
       <div>
         <div class="name">${escapeHtml(ev.nome)}</div>
         <div class="meta">${ev.data ? formatDataBR(ev.data) + ' · ' : ''}${ev.status === 'encerrado' ? 'Encerrado' : 'Ativo'}${pct !== null ? ' · ' + pct + '% presença' : ''}</div>
-        ${ev.status === 'encerrado' ? `<div class="btn ghost" style="margin-top:6px; padding:2px 0; font-size:12px; display:inline-block;" data-action="corrigir-convocacao" data-id="${ev.id}">✏️ Corrigir</div>` : ''}
+        <div style="margin-top:6px; display:flex; gap:14px; flex-wrap:wrap;">
+          ${ev.status === 'encerrado' ? `<div class="btn ghost" style="padding:2px 0; font-size:12px;" data-action="corrigir-convocacao" data-id="${ev.id}">✏️ Corrigir</div>` : ''}
+          ${ev.textoOriginal ? `<div class="btn ghost" style="padding:2px 0; font-size:12px;" data-action="toggle-texto-original" data-id="${ev.id}">${textoAberto ? '📄 Esconder texto original' : '📄 Ver texto original'}</div>` : ''}
+          <div class="btn ghost" style="padding:2px 0; font-size:12px;" data-action="ask-delete-event" data-id="${ev.id}">🗑️ Excluir</div>
+        </div>
+        ${textoAberto ? `<pre class="texto-original-pre" data-action="ignore-click">${escapeHtml(ev.textoOriginal)}</pre>` : ''}
+        ${confirmandoExclusao ? `
+          <div class="alert" data-action="ignore-click" style="margin-top:10px;">
+            <div class="alert-title">Excluir "${escapeHtml(ev.nome)}"?</div>
+            <div class="alert-msg">Apaga o evento e as confirmações de todos os membros. Não dá para desfazer.</div>
+            <div class="row-gap" style="margin-top:10px;">
+              <button class="btn danger" data-action="delete-event" data-id="${ev.id}">Sim, excluir</button>
+              <button class="btn secondary" data-action="cancel-delete-event">Cancelar</button>
+            </div>
+          </div>
+        ` : ''}
       </div>
       <div class="arrow">›</div>
     </div>
@@ -4009,6 +4079,12 @@ document.getElementById('app').addEventListener('click', async (e) => {
     return render();
   }
   if (action === 'corrigir-convocacao') return iniciarCorrecaoConvocacao(id);
+  if (action === 'toggle-texto-original') {
+    if (state.relatorioTextoOriginalExpandido.has(id)) state.relatorioTextoOriginalExpandido.delete(id);
+    else state.relatorioTextoOriginalExpandido.add(id);
+    return render();
+  }
+  if (action === 'ignore-click') return;
   if (action === 'cancelar-correcao-convocacao') {
     state.relatorioEditandoEventoId = null;
     state.relatorioCategoriaAlvo = null;

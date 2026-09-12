@@ -21,7 +21,7 @@
 
 // Marcador para conferir o que esta publicado de fato: basta chamar a URL do
 // Web App com ?action=versao. Subir sempre junto com as alteracoes.
-var VERSAO = '2026-09-12-v-corrigir-convocacao';
+var VERSAO = '2026-09-12-v-texto-original';
 
 var ABA_MEMBROS = 'Membros';
 var ABA_EVENTOS = 'Eventos';
@@ -34,7 +34,11 @@ var ABA_INSIGHT_PRESENCAS = 'InsightPresencas';
 var ABA_INSIGHT_EXCLUIDOS = 'InsightExcluidos';
 
 var CAB_MEMBROS = ['ID', 'Nome', 'Grau', 'Divisao', 'Funcoes'];
-var CAB_EVENTOS = ['ID', 'Nome', 'Data', 'Horario', 'Endereco', 'Outros', 'Status', 'Criado em', 'Categoria', 'Tipo'];
+// "Texto Original" (ultima coluna) so existe pra eventos criados via colar
+// convocacao (ver criarEventoDeTexto) - eventos criados pelo Modo
+// organizador manual ficam com essa coluna vazia, e lerEventos() ja trata
+// esse caso (linhas antigas nem tem a coluna preenchida na planilha).
+var CAB_EVENTOS = ['ID', 'Nome', 'Data', 'Horario', 'Endereco', 'Outros', 'Status', 'Criado em', 'Categoria', 'Tipo', 'Texto Original'];
 var CAB_PRESENCAS = ['ID Evento', 'Evento', 'ID Membro', 'Membro', 'Status',
                      'Direto', 'Destacado', 'Acompanhado', 'Atualizado em'];
 // So membros de divisao fazem insight (Regional RJ4 fica de fora - ver
@@ -286,6 +290,7 @@ function lerEventos() {
           return (raw === '' || raw === 'divisao') ? 'barra' : raw;
         })(),
         tipo: String(l[9] || ''),
+        textoOriginal: String(l[10] || ''),
         memberIds: membrosDoEvento(String(l[0]))
       };
     });
@@ -881,8 +886,14 @@ function salvarEvento(p) {
   var achado = acharLinha(s, function (l) { return String(l[0]) === String(id); });
   var criadoEm = achado ? achado.valores[7] : agora();
   var categoria = String(p.categoria || 'barra');
+  // So criarEventoDeTexto manda textoOriginal - o formulario manual do Modo
+  // organizador (eventoSalvar) nao manda esse campo nenhuma vez, entao sem
+  // esse fallback pro valor ja gravado, editar um evento por ali (ou so
+  // encerrar/reabrir, que tambem passa por aqui) apagaria o texto original
+  // guardado numa correcao anterior.
+  var textoOriginal = p.textoOriginal !== undefined ? p.textoOriginal : (achado ? achado.valores[10] : '');
   var linha = [id, p.nome, p.data || '', p.horario || '', p.endereco || '',
-               p.outros || '', p.status || 'ativo', criadoEm, categoria, p.tipo || ''];
+               p.outros || '', p.status || 'ativo', criadoEm, categoria, p.tipo || '', textoOriginal || ''];
   if (achado) s.getRange(achado.indice, 1, 1, linha.length).setValues([linha]);
   else s.appendRow(linha);
   renomearEmPresencas(0, id, p.nome);
@@ -1003,7 +1014,8 @@ function criarEventoDeTexto(p) {
   var membros = Array.isArray(p.membros) ? p.membros : parseOuVazio(p.membros, []);
   var eventoResp = salvarEvento({
     id: p.id, nome: p.nome, data: p.data, horario: p.horario,
-    endereco: p.endereco, outros: p.outros, status: p.status, categoria: p.categoria, tipo: p.tipo
+    endereco: p.endereco, outros: p.outros, status: p.status, categoria: p.categoria, tipo: p.tipo,
+    textoOriginal: p.textoOriginal
   });
   ajustarParticipantesComStatus(eventoResp.id, p.nome, membros);
   return { ok: true, id: eventoResp.id };
