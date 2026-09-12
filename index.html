@@ -728,6 +728,10 @@ let state = {
   relatorioSalvando: false,
   relatorioSalvarErro: null,
   relatorioSalvoEventoId: null,
+  // Evento(s) ja existentes na mesma data/divisao, achados ao clicar em
+  // "Confirmar" - so um aviso, nao bloqueia (ver eventosPossivelmenteDuplicados).
+  relatorioDuplicidadeAviso: null,
+  relatorioDuplicidadeConfirmada: false,
   // Aba "Presenca": % de cada integrante (mesmo motor de lerEstatisticasMembros
   // que ja alimenta o Modo organizador, so que aqui roda para relatorioEscopo).
   relatorioEstatisticas: null,
@@ -2237,7 +2241,18 @@ function analisarConvocacao() {
   parsed.autoResolvidos = parsed.membrosParsed.filter(r => r.membroId).length;
   state.relatorioParsed = parsed;
   state.relatorioColarStep = 'revisao';
+  state.relatorioDuplicidadeAviso = null;
+  state.relatorioDuplicidadeConfirmada = false;
   render();
+}
+
+// Mesma divisao (categoria) e mesma data ja tem outro evento gravado - sinal
+// forte de convocacao colada duas vezes por engano (ou duplo clique em
+// "Confirmar"). Nao bloqueia - so avisa, porque duas divisoes podem ter
+// eventos legitimos no mesmo dia, ou o clube pode ter dois eventos no mesmo
+// dia de fato.
+function eventosPossivelmenteDuplicados(data, categoria) {
+  return state.events.filter(e => e.data === data && e.categoria === categoria);
 }
 
 const STATUS_TOTAIS_LABEL = {
@@ -2341,9 +2356,22 @@ function conteudoRelatorioRevisao() {
       </div>
     ` : ''}
 
-    <button class="btn block" style="margin-top:14px;" data-action="confirmar-evento-parseado" ${podeConfirmar && !state.relatorioSalvando ? '' : 'disabled'}>
-      ${state.relatorioSalvando ? 'Salvando…' : 'Confirmar e criar evento'}
-    </button>
+    ${state.relatorioDuplicidadeAviso && state.relatorioDuplicidadeAviso.length ? `
+      <div class="alert" style="margin-top:14px;">
+        <div class="alert-title">${state.relatorioDuplicidadeAviso.length === 1 ? 'Já existe um evento nessa data' : 'Já existem eventos nessa data'}</div>
+        <div class="alert-msg">
+          Em ${formatDataBR(ev.data)}, nessa divisão: ${state.relatorioDuplicidadeAviso.map(d => escapeHtml(d.nome)).join(', ')}. Confira se não é o mesmo evento antes de criar outro.
+        </div>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <button class="btn ghost" style="flex:1;" data-action="cancelar-duplicidade-relatorio">Cancelar</button>
+          <button class="btn block" style="flex:1;" data-action="confirmar-duplicidade-relatorio" ${state.relatorioSalvando ? 'disabled' : ''}>${state.relatorioSalvando ? 'Salvando…' : 'Criar mesmo assim'}</button>
+        </div>
+      </div>
+    ` : `
+      <button class="btn block" style="margin-top:14px;" data-action="confirmar-evento-parseado" ${podeConfirmar && !state.relatorioSalvando ? '' : 'disabled'}>
+        ${state.relatorioSalvando ? 'Salvando…' : 'Confirmar e criar evento'}
+      </button>
+    `}
   `;
 }
 
@@ -2385,6 +2413,11 @@ async function confirmarEventoParseado() {
     endereco: document.getElementById('rev-evento-endereco').value.trim(),
     outros: document.getElementById('rev-evento-outros').value.trim()
   };
+  // Grava direto em parsed.evento antes de qualquer validacao - se render()
+  // for chamado de novo daqui pra frente (campo faltando, duplicidade
+  // encontrada), os inputs sao reconstruidos a partir de parsed.evento, e
+  // sem isso a edicao que a pessoa acabou de fazer no campo se perderia.
+  Object.assign(parsed.evento, ev);
   if (!ev.nome) { state.relatorioSalvarErro = 'Preencha o nome do evento.'; return render(); }
   // Data/tipo/integrantes sao os 3 pontos que o evento sempre precisa
   // gravar - o texto colado pode nao trazer a data (como nesse exemplo sem
@@ -2392,6 +2425,13 @@ async function confirmarEventoParseado() {
   // branco.
   if (!ev.data) { state.relatorioSalvarErro = 'Preencha a data do evento.'; return render(); }
   if (!parsed.evento.tipo) { state.relatorioSalvarErro = 'Escolha o tipo de evento.'; return render(); }
+
+  const categoria = state.relatorioCategoriaAlvo || state.relatorioEscopo;
+  if (!state.relatorioDuplicidadeConfirmada) {
+    const duplicatas = eventosPossivelmenteDuplicados(ev.data, categoria);
+    if (duplicatas.length) { state.relatorioDuplicidadeAviso = duplicatas; return render(); }
+  }
+  state.relatorioDuplicidadeAviso = null;
 
   const membros = parsed.membrosParsed
     .filter(r => !r.ignorado && r.membroId)
@@ -2407,7 +2447,7 @@ async function confirmarEventoParseado() {
       // (relatorioCategoriaAlvo), nao o escopo de acesso (relatorioEscopo) -
       // um organizador Regional pode estar colando a convocacao so da
       // Curicica, e o evento tem que nascer como categoria "curicica".
-      categoria: state.relatorioCategoriaAlvo || state.relatorioEscopo, tipo: parsed.evento.tipo || '',
+      categoria: categoria, tipo: parsed.evento.tipo || '',
       // A lista colada ja e o resultado final (quem foi, quem faltou) - o
       // evento nasce encerrado, sem precisar que o organizador va la depois
       // so pra clicar em "Encerrar". Isso tambem faz a % de presenca do
@@ -3695,6 +3735,8 @@ document.getElementById('app').addEventListener('click', async (e) => {
     state.relatorioTextoBruto = '';
     state.relatorioParsed = null;
     state.relatorioSalvarErro = null;
+    state.relatorioDuplicidadeAviso = null;
+    state.relatorioDuplicidadeConfirmada = false;
     state.relatorioTab = 'resumo';
     state.relatorioColarStep = 'texto';
     state.relatorioEstatisticas = null;
@@ -3741,7 +3783,12 @@ document.getElementById('app').addEventListener('click', async (e) => {
     if (target.dataset.tab === 'resumo') await loadRelatorioEstatisticas();
     return;
   }
-  if (action === 'go-relatorio-texto') { state.relatorioColarStep = 'texto'; return render(); }
+  if (action === 'go-relatorio-texto') {
+    state.relatorioColarStep = 'texto';
+    state.relatorioDuplicidadeAviso = null;
+    state.relatorioDuplicidadeConfirmada = false;
+    return render();
+  }
   if (action === 'analisar-convocacao') return analisarConvocacao();
   if (action === 'aceitar-sugestao') {
     const row = state.relatorioParsed.membrosParsed[Number(target.dataset.index)];
@@ -3758,10 +3805,17 @@ document.getElementById('app').addEventListener('click', async (e) => {
     return render();
   }
   if (action === 'confirmar-evento-parseado') return confirmarEventoParseado();
+  if (action === 'cancelar-duplicidade-relatorio') { state.relatorioDuplicidadeAviso = null; return render(); }
+  if (action === 'confirmar-duplicidade-relatorio') {
+    state.relatorioDuplicidadeConfirmada = true;
+    return confirmarEventoParseado();
+  }
   if (action === 'nova-convocacao') {
     state.relatorioTextoBruto = '';
     state.relatorioParsed = null;
     state.relatorioSalvarErro = null;
+    state.relatorioDuplicidadeAviso = null;
+    state.relatorioDuplicidadeConfirmada = false;
     state.relatorioColarStep = 'texto';
     return render();
   }
